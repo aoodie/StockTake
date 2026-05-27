@@ -2,6 +2,22 @@ const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
 const SCAN_DEBOUNCE_MS = 850;
+const CAMERA_DETECT_INTERVAL_MS = 75;
+const BARCODE_FORMATS = [
+  "aztec",
+  "codabar",
+  "code_39",
+  "code_93",
+  "code_128",
+  "data_matrix",
+  "ean_8",
+  "ean_13",
+  "itf",
+  "pdf417",
+  "qr_code",
+  "upc_a",
+  "upc_e"
+];
 const productIndex = new Map();
 
 const els = {
@@ -268,7 +284,7 @@ async function handleScan(barcode, options = {}) {
   barcode = normalizeBarcode(barcode);
   if (!barcode) return;
   if (state.sleeping && !options.allowWhileSleeping) return;
-  if (state.pendingBarcode && !options.replacePending) return;
+  if (state.pendingBarcode && state.pendingBarcode === barcode && !options.replacePending) return;
   resetInactivityTimer();
   const now = Date.now();
   if (
@@ -646,7 +662,12 @@ async function startCamera() {
   stopAutoScan();
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        focusMode: { ideal: "continuous" }
+      },
       audio: false
     });
   } catch {
@@ -664,7 +685,25 @@ async function startCamera() {
 
 async function startScanLoop() {
   if (window.ZXing?.BrowserMultiFormatReader) {
-    state.zxingReader = new window.ZXing.BrowserMultiFormatReader();
+    const hints = new Map();
+    const formats = [
+      window.ZXing.BarcodeFormat?.EAN_13,
+      window.ZXing.BarcodeFormat?.EAN_8,
+      window.ZXing.BarcodeFormat?.UPC_A,
+      window.ZXing.BarcodeFormat?.UPC_E,
+      window.ZXing.BarcodeFormat?.CODE_128,
+      window.ZXing.BarcodeFormat?.CODE_39,
+      window.ZXing.BarcodeFormat?.ITF,
+      window.ZXing.BarcodeFormat?.CODABAR,
+      window.ZXing.BarcodeFormat?.QR_CODE
+    ].filter((format) => format !== undefined);
+    if (window.ZXing.DecodeHintType?.POSSIBLE_FORMATS) {
+      hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    }
+    if (window.ZXing.DecodeHintType?.TRY_HARDER) {
+      hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
+    }
+    state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, CAMERA_DETECT_INTERVAL_MS);
     state.zxingControls = await state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
       if (result?.text && !state.sleeping) handleScan(result.text);
     });
@@ -676,7 +715,9 @@ async function startScanLoop() {
     setAutoScan(false);
     return;
   }
-  state.detector = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39"] });
+  const supportedFormats = await BarcodeDetector.getSupportedFormats?.().catch(() => []) || [];
+  const formats = BARCODE_FORMATS.filter((format) => supportedFormats.length === 0 || supportedFormats.includes(format));
+  state.detector = new BarcodeDetector({ formats });
   state.scanLoopActive = true;
   while (state.scanLoopActive) {
     if (!state.sleeping && els.preview.readyState >= 2) {
@@ -687,7 +728,7 @@ async function startScanLoop() {
         setSyncStatus("Scanner warming");
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await new Promise((resolve) => setTimeout(resolve, CAMERA_DETECT_INTERVAL_MS));
   }
 }
 
