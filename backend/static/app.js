@@ -615,6 +615,7 @@ function showDuplicateDialog(existingLine, newQuantity) {
   els.duplicateProduct.textContent = `${existingLine.product_name} is already counted in ${state.locationName}.`;
   els.duplicateExisting.textContent = existingLine.quantity_decimal;
   els.duplicateNew.textContent = normalizeQuantity(newQuantity);
+  els.duplicateDialog.returnValue = "cancel";
   return new Promise((resolve) => {
     const cleanup = () => {
       els.duplicateAddButton.removeEventListener("click", onAdd);
