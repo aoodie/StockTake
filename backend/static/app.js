@@ -21,6 +21,7 @@ const els = {
   manualBarcode: document.querySelector("#manualBarcode"),
   manualScanButton: document.querySelector("#manualScanButton"),
   retryCameraButton: document.querySelector("#retryCameraButton"),
+  quantityInput: document.querySelector("#quantityInput"),
   quantityDisplay: document.querySelector("#quantityDisplay"),
   keypad: document.querySelector("#keypad"),
   undoButton: document.querySelector("#undoButton"),
@@ -48,6 +49,7 @@ let state = {
   locationName: "Main Bar",
   quantity: "",
   currentProduct: null,
+  pendingBarcode: "",
   lastBarcode: null,
   lastScanAt: 0,
   hardwareBlockedUntil: 0,
@@ -265,6 +267,7 @@ async function handleScan(barcode, options = {}) {
   barcode = normalizeBarcode(barcode);
   if (!barcode) return;
   if (state.sleeping && !options.allowWhileSleeping) return;
+  if (state.pendingBarcode && !options.replacePending) return;
   resetInactivityTimer();
   const now = Date.now();
   if (
@@ -279,21 +282,15 @@ async function handleScan(barcode, options = {}) {
 
   const product = await getProduct(barcode);
   state.currentProduct = product;
+  state.pendingBarcode = barcode;
+  state.quantity = "";
   renderProduct(product);
-
-  if (state.mode === "multi") {
-    await addLine(product, "1");
-    const count = await currentCount(barcode);
-    pulse(`+1 Added\nCurrent count: ${count}`);
-    flashFeedback(product.draft_status === "draft" ? "error" : "success");
-    vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
-  } else if (product.draft_status === "draft") {
-    flashFeedback("error");
-    vibrate([80, 50, 120]);
-  } else {
-    flashFeedback("success");
-    vibrate(25);
-  }
+  renderQuantity();
+  focusQuantity();
+  beepOnce();
+  pulse("Scanned\nEnter quantity");
+  flashFeedback(product.draft_status === "draft" ? "error" : "success");
+  vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
   await saveState();
 }
 
@@ -405,6 +402,13 @@ function renderProduct(product) {
   els.productPhoto.innerHTML = product.photo_url ? `<img alt="" src="${product.photo_url}">` : "Photo";
 }
 
+function clearProductCard() {
+  els.productName.textContent = "Ready to scan";
+  els.productMeta.textContent = "Scan a barcode or enter one manually.";
+  els.productBin.textContent = "BIN: -";
+  els.productPhoto.textContent = "Photo";
+}
+
 function normalizeQuantity(value) {
   if (!isValidQuantity(value)) return "0";
   return String(Number(value));
@@ -433,15 +437,33 @@ function appendQuantity(key) {
 
 function renderQuantity() {
   els.quantityDisplay.textContent = state.quantity || "0";
+  els.quantityInput.value = state.quantity;
 }
 
 async function confirmQuantity() {
-  if (!state.currentProduct || !isValidQuantity(state.quantity)) return;
-  await addLine(state.currentProduct, state.quantity);
+  if (!state.currentProduct) {
+    els.manualBarcode.focus();
+    return;
+  }
+  const quantity = state.quantity || "1";
+  if (!isValidQuantity(quantity)) {
+    els.quantityInput.classList.add("error");
+    flashFeedback("error");
+    vibrate([80, 50, 120]);
+    return;
+  }
+  await addLine(state.currentProduct, quantity);
   const count = await currentCount(state.currentProduct.barcode);
   pulse(`Saved\nCurrent count: ${count}`);
+  flashFeedback("success");
   state.quantity = "";
+  state.pendingBarcode = "";
+  state.currentProduct = null;
   renderQuantity();
+  clearProductCard();
+  els.quantityInput.classList.remove("pending", "error");
+  els.manualBarcode.value = "";
+  els.manualBarcode.focus();
 }
 
 async function undoLastScan() {
@@ -528,6 +550,35 @@ function flashFeedback(kind) {
   document.body.classList.add(className);
   clearTimeout(flashFeedback.timer);
   flashFeedback.timer = setTimeout(() => document.body.classList.remove(className), 360);
+}
+
+function focusQuantity() {
+  els.quantityInput.classList.remove("error");
+  els.quantityInput.classList.add("pending");
+  els.quantityInput.focus();
+  els.quantityInput.select();
+}
+
+function beepOnce() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const context = beepOnce.context || new AudioContext();
+    beepOnce.context = context;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.11);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.12);
+  } catch {
+    // Audio feedback is a convenience; scanning must never depend on it.
+  }
 }
 
 function vibrate(pattern) {
@@ -648,7 +699,7 @@ function processManualScan() {
   if (now < state.hardwareBlockedUntil) return;
   state.hardwareBlockedUntil = now + SCAN_DEBOUNCE_MS;
 
-  handleScan(barcode, { allowWhileSleeping: true, debounce: true });
+  handleScan(barcode, { allowWhileSleeping: true, debounce: true, replacePending: true });
 }
 
 function bindEvents() {
@@ -666,6 +717,17 @@ function bindEvents() {
     if (event.key === "Enter") {
       event.preventDefault();
       processManualScan();
+    }
+  });
+  els.quantityInput.addEventListener("input", () => {
+    state.quantity = els.quantityInput.value.trim();
+    renderQuantity();
+  });
+  els.quantityInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      state.quantity = els.quantityInput.value.trim();
+      confirmQuantity();
     }
   });
   els.keypad.addEventListener("click", (event) => {

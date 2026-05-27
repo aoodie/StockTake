@@ -154,6 +154,20 @@ output {
   font-size: 44px;
   font-weight: 900;
 }
+#quantityInput {
+  min-height: 64px;
+  font-size: 28px;
+  font-weight: 900;
+  text-align: right;
+}
+#quantityInput.pending {
+  border-color: #93c5fd;
+  background: #172554;
+}
+#quantityInput.error {
+  border-color: #fca5a5;
+  background: #7f1d1d;
+}
 .keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .keys button { min-height: 62px; font-size: 22px; }
 .keys .confirm { grid-row: span 2; background: #16a34a; }
