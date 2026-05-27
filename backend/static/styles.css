@@ -145,21 +145,39 @@ h1, h2, p { margin: 0; }
 h1 { font-size: 20px; }
 p { margin-top: 6px; color: #cbd5e1; }
 
-.manual-scan { display: grid; grid-template-columns: 1fr 110px 140px; gap: 8px; }
-.keypad { display: grid; gap: 10px; }
-output {
-  display: block;
-  min-height: 70px;
-  padding: 8px 14px;
+.manual-scan { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
+.manual-panel {
+  min-width: 0;
   border-radius: 8px;
   background: #111827;
-  text-align: right;
-  font-size: 44px;
+}
+.manual-panel summary {
+  display: grid;
+  place-items: center;
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: 8px;
+  color: #f8fafc;
+  background: #1f2937;
   font-weight: 900;
+  cursor: pointer;
+  list-style: none;
+}
+.manual-panel summary::-webkit-details-marker { display: none; }
+.manual-controls { display: grid; grid-template-columns: 1fr 96px; gap: 8px; padding: 8px 0 0; }
+#retryCameraButton { min-width: 140px; }
+.keypad { display: grid; gap: 10px; }
+output {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
 }
 #quantityInput {
-  min-height: 64px;
-  font-size: 28px;
+  min-height: 58px;
+  padding: 6px 14px;
+  font-size: 38px;
   font-weight: 900;
   text-align: right;
 }
@@ -172,7 +190,7 @@ output {
   background: #7f1d1d;
 }
 .keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.keys button { min-height: 62px; font-size: 22px; }
+.keys button { min-height: 56px; font-size: 21px; }
 .keys .confirm { grid-row: span 2; background: #16a34a; }
 .keys .filler { visibility: hidden; }
 
@@ -191,25 +209,83 @@ dialog {
 .line-list { display: grid; gap: 8px; max-height: 60vh; overflow: auto; }
 .line-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
   gap: 10px;
+  align-items: center;
   padding: 10px;
   border-radius: 8px;
   background: #111827;
+  text-align: left;
 }
-.line-row strong, .line-row small { display: block; }
+.line-thumb {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+  background: #1f2937;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 900;
+  overflow: hidden;
+}
+.line-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.line-main { min-width: 0; }
+.line-main strong, .line-main small { display: block; }
+.line-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .line-row small { margin-top: 4px; color: #94a3b8; }
+.line-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.badge {
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: #1e293b;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.badge.warning { background: #7f1d1d; color: #fecaca; }
+.badge.draft { background: #78350f; color: #fed7aa; }
 .qty { font-size: 24px; font-weight: 900; }
+.duplicate-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #111827;
+}
+.duplicate-grid span { color: #94a3b8; font-weight: 800; }
+.duplicate-grid strong { font-size: 24px; }
+.duplicate-shell button:first-of-type { background: #16a34a; }
+.duplicate-shell button:nth-of-type(2) { background: #2563eb; }
 
 @media (max-width: 560px) {
   .topbar { grid-template-columns: 1fr 1fr; }
   .sync-pill { grid-column: 1 / -1; }
   .actions { grid-template-columns: 1fr; }
-  .manual-scan { grid-template-columns: 1fr; }
+  .manual-scan { grid-template-columns: 1fr auto; }
+  .manual-panel summary, #retryCameraButton { min-height: 48px; }
+  #retryCameraButton { min-width: 116px; }
+  .manual-controls { grid-template-columns: 1fr; }
   .scanner-panel { height: clamp(132px, 22vh, 180px); }
   .auto-scan-badge { top: 8px; left: 8px; padding: 8px 10px; }
   .icon-button { top: 8px; right: 8px; min-height: 44px; min-width: 68px; }
   .pulse { left: 10px; right: 10px; bottom: 10px; padding: 10px; font-size: 18px; }
+  #quantityInput { min-height: 52px; font-size: 34px; }
+  .keys { gap: 7px; }
+  .keys button { min-height: 50px; font-size: 19px; }
+  dialog {
+    width: 100%;
+    max-width: none;
+    margin: auto 0 0;
+    border-radius: 12px 12px 0 0;
+  }
+  .line-list { max-height: 68vh; }
 }
 
 @keyframes success-flash {

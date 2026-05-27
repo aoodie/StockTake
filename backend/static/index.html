@@ -47,15 +47,20 @@
       </section>
 
       <section class="manual-scan">
-        <input id="manualBarcode" inputmode="numeric" placeholder="Manual barcode">
-        <button id="manualScanButton" type="button">Scan</button>
+        <details class="manual-panel">
+          <summary>Manual</summary>
+          <div class="manual-controls">
+            <input id="manualBarcode" inputmode="numeric" placeholder="Barcode">
+            <button id="manualScanButton" type="button">Scan</button>
+          </div>
+        </details>
         <button id="retryCameraButton" type="button">Retry Camera</button>
       </section>
 
       <section class="keypad" id="keypad">
         <label for="quantityInput">Quantity</label>
-        <input id="quantityInput" inputmode="decimal" placeholder="Enter quantity, then press Enter">
-        <output id="quantityDisplay">0</output>
+        <input id="quantityInput" inputmode="none" autocomplete="off" placeholder="Qty">
+        <output id="quantityDisplay" aria-live="polite">0</output>
         <div class="keys">
           <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button><button data-action="clear">CLEAR</button>
           <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><button class="confirm" data-action="confirm">CONFIRM & NEXT</button>
@@ -88,6 +93,22 @@
         <input id="editQuantity" inputmode="decimal" aria-label="New quantity">
         <button id="saveEditButton" type="button">Save Quantity</button>
         <button id="deleteLineButton" class="danger" type="button">Delete Line</button>
+        <button value="cancel">Cancel</button>
+      </form>
+    </dialog>
+
+    <dialog id="duplicateDialog">
+      <form method="dialog" class="dialog-shell duplicate-shell">
+        <h2>Already Scanned</h2>
+        <p id="duplicateProduct"></p>
+        <div class="duplicate-grid">
+          <span>Existing</span>
+          <strong id="duplicateExisting">0</strong>
+          <span>New scan</span>
+          <strong id="duplicateNew">0</strong>
+        </div>
+        <button id="duplicateAddButton" value="add" type="button">Add to Existing</button>
+        <button id="duplicateEditButton" value="edit" type="button">Edit Existing</button>
         <button value="cancel">Cancel</button>
       </form>
     </dialog>

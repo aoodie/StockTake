@@ -53,7 +53,13 @@ const els = {
   editTitle: document.querySelector("#editTitle"),
   editQuantity: document.querySelector("#editQuantity"),
   saveEditButton: document.querySelector("#saveEditButton"),
-  deleteLineButton: document.querySelector("#deleteLineButton")
+  deleteLineButton: document.querySelector("#deleteLineButton"),
+  duplicateDialog: document.querySelector("#duplicateDialog"),
+  duplicateProduct: document.querySelector("#duplicateProduct"),
+  duplicateExisting: document.querySelector("#duplicateExisting"),
+  duplicateNew: document.querySelector("#duplicateNew"),
+  duplicateAddButton: document.querySelector("#duplicateAddButton"),
+  duplicateEditButton: document.querySelector("#duplicateEditButton")
 };
 
 let db;
@@ -326,6 +332,7 @@ async function addLine(product, quantity) {
     size: product.size,
     quantity_decimal: normalizeQuantity(quantity),
     unit: product.unit,
+    photo_url: product.photo_url || "",
     draft_status: product.draft_status,
     missing_bin: !product.bin,
     counted_at: new Date().toISOString(),
@@ -414,7 +421,8 @@ async function scopedLines() {
 
 function renderProduct(product) {
   els.productName.textContent = product.name;
-  els.productMeta.textContent = `${product.category || "Uncategorised"} ${product.size ? "• " + product.size : ""}`;
+  els.productMeta.textContent = [product.category || "Uncategorised", product.size].filter(Boolean).join(" | ");
+  els.productMeta.textContent = [product.category || "Uncategorised", product.size].filter(Boolean).join(" | ");
   els.productBin.textContent = `BIN: ${product.bin || "Missing"}`;
   els.productPhoto.innerHTML = product.photo_url ? `<img alt="" src="${product.photo_url}">` : "Photo";
 }
@@ -471,11 +479,14 @@ async function confirmQuantity() {
   }
   const existingLine = await findExistingLineForProduct(state.currentProduct);
   if (existingLine) {
-    const addToExisting = window.confirm(
-      `${state.currentProduct.name} has already been scanned in ${state.locationName}. Add this quantity to the existing line?`
-    );
-    if (!addToExisting) {
+    const duplicateAction = await showDuplicateDialog(existingLine, quantity);
+    if (duplicateAction === "cancel") {
       focusQuantity();
+      return;
+    }
+    if (duplicateAction === "edit") {
+      resetActiveScan();
+      openLineEditor(existingLine);
       return;
     }
     const newQuantity = addDecimalStrings(existingLine.quantity_decimal, quantity);
@@ -486,6 +497,10 @@ async function confirmQuantity() {
   const count = await currentCount(state.currentProduct.barcode);
   pulse(`Saved\nCurrent count: ${count}`);
   flashFeedback("success");
+  resetActiveScan();
+}
+
+function resetActiveScan() {
   state.quantity = "";
   state.pendingBarcode = "";
   state.currentProduct = null;
@@ -493,7 +508,6 @@ async function confirmQuantity() {
   clearProductCard();
   els.quantityInput.classList.remove("pending", "error");
   els.manualBarcode.value = "";
-  els.manualBarcode.focus();
 }
 
 async function undoLastScan() {
@@ -569,22 +583,60 @@ async function renderLines() {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "line-row";
+    const badges = [
+      line.missing_bin ? `<span class="badge warning">Missing BIN</span>` : "",
+      line.draft_status === "draft" ? `<span class="badge draft">Draft</span>` : ""
+    ].join("");
     row.innerHTML = `
-      <span>
+      <span class="line-thumb">${line.photo_url ? `<img alt="" src="${escapeHtml(line.photo_url)}">` : "Photo"}</span>
+      <span class="line-main">
         <strong>${escapeHtml(line.product_name)}</strong>
-        <small>${escapeHtml(line.barcode)} • BIN: ${escapeHtml(line.bin || "Missing")} • ${escapeHtml(line.sync_status)}</small>
-        <small>${escapeHtml(line.draft_status)} • ${new Date(line.counted_at).toLocaleTimeString()}</small>
+        <small>${escapeHtml(line.barcode)} | BIN: ${escapeHtml(line.bin || "Missing")} | ${escapeHtml(line.sync_status)}</small>
+        <small>${new Date(line.counted_at).toLocaleTimeString()}</small>
+        <span class="line-badges">${badges}</span>
       </span>
       <span class="qty">${escapeHtml(line.quantity_decimal)}</span>
     `;
     row.addEventListener("click", () => {
-      state.editingLine = line;
-      els.editTitle.textContent = line.product_name;
-      els.editQuantity.value = line.quantity_decimal;
-      els.editDialog.showModal();
+      openLineEditor(line);
     });
     els.lineList.append(row);
   }
+}
+
+function openLineEditor(line) {
+  state.editingLine = line;
+  els.editTitle.textContent = line.product_name;
+  els.editQuantity.value = line.quantity_decimal;
+  els.editDialog.showModal();
+}
+
+function showDuplicateDialog(existingLine, newQuantity) {
+  els.duplicateProduct.textContent = `${existingLine.product_name} is already counted in ${state.locationName}.`;
+  els.duplicateExisting.textContent = existingLine.quantity_decimal;
+  els.duplicateNew.textContent = normalizeQuantity(newQuantity);
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      els.duplicateAddButton.removeEventListener("click", onAdd);
+      els.duplicateEditButton.removeEventListener("click", onEdit);
+      els.duplicateDialog.removeEventListener("close", onClose);
+    };
+    const finish = (action) => {
+      cleanup();
+      els.duplicateDialog.close(action);
+      resolve(action);
+    };
+    const onAdd = () => finish("add");
+    const onEdit = () => finish("edit");
+    const onClose = () => {
+      cleanup();
+      resolve(els.duplicateDialog.returnValue || "cancel");
+    };
+    els.duplicateAddButton.addEventListener("click", onAdd);
+    els.duplicateEditButton.addEventListener("click", onEdit);
+    els.duplicateDialog.addEventListener("close", onClose);
+    els.duplicateDialog.showModal();
+  });
 }
 
 function escapeHtml(value) {
