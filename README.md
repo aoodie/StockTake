@@ -62,7 +62,7 @@ Production domain: `stock.aoodie.xyz`
 
 Recommended setup:
 
-- Run FastAPI with Uvicorn on `127.0.0.1:8000`.
+- Run FastAPI with Uvicorn on `127.0.0.1:8099`.
 - Put Nginx/Caddy in front of it for HTTPS.
-- Proxy `https://stock.aoodie.xyz` to `http://127.0.0.1:8000`.
+- Proxy `https://stock.aoodie.xyz` to `http://127.0.0.1:8099`.
 - Ensure the TLS certificate is valid; mobile camera access will not work reliably over plain HTTP.

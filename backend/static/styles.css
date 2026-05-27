@@ -7,6 +7,8 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: #07090c; }
+body.feedback-success { animation: success-flash 220ms ease-out; }
+body.feedback-error { animation: error-flash 320ms ease-out; }
 button, input, select { font: inherit; }
 button {
   min-height: 52px;
@@ -187,4 +189,14 @@ dialog {
   .sync-pill { grid-column: 1 / -1; }
   .actions { grid-template-columns: 1fr; }
   .manual-scan { grid-template-columns: 1fr; }
+}
+
+@keyframes success-flash {
+  0% { background: #14532d; }
+  100% { background: #07090c; }
+}
+
+@keyframes error-flash {
+  0% { background: #7f1d1d; }
+  100% { background: #07090c; }
 }

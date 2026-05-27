@@ -2,6 +2,7 @@ const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
 const SCAN_DEBOUNCE_MS = 850;
+const productIndex = new Map();
 
 const els = {
   preview: document.querySelector("#preview"),
@@ -49,6 +50,7 @@ let state = {
   currentProduct: null,
   lastBarcode: null,
   lastScanAt: 0,
+  hardwareBlockedUntil: 0,
   sleeping: false,
   editingLine: null,
   detector: null,
@@ -147,7 +149,10 @@ async function syncCatalog() {
     const response = await fetch("/catalog");
     if (!response.ok) throw new Error("Catalog failed");
     const catalog = await response.json();
-    for (const product of catalog.products) await put("products", normalProduct(product));
+    productIndex.clear();
+    for (const product of catalog.products) {
+      await cacheProduct(normalProduct(product));
+    }
     if (catalog.locations.length) renderLocations(catalog.locations);
     await put("meta", {
       key: "catalog",
@@ -160,10 +165,19 @@ async function syncCatalog() {
   }
 }
 
+async function loadProductIndex() {
+  productIndex.clear();
+  for (const product of await all("products")) {
+    indexProduct(product);
+  }
+}
+
 function normalProduct(product) {
+  const barcode = normalizeBarcode(product.barcode);
   return {
-    id: product.id || `product-${product.barcode}`,
-    barcode: product.barcode,
+    id: product.id || `product-${barcode}`,
+    barcode,
+    barcode_raw: String(product.barcode ?? "").trim(),
     bin: product.bin || "",
     name: product.name || "Unknown Product",
     category: product.category || "",
@@ -174,6 +188,34 @@ function normalProduct(product) {
     draft_status: product.draft_status || "confirmed",
     product_updated_at: product.product_updated_at || new Date().toISOString()
   };
+}
+
+async function cacheProduct(product) {
+  await put("products", product);
+  indexProduct(product);
+}
+
+function indexProduct(product) {
+  const keys = barcodeLookupKeys(product.barcode);
+  if (product.barcode_raw) keys.push(...barcodeLookupKeys(product.barcode_raw));
+  for (const key of new Set(keys)) {
+    productIndex.set(key, product);
+  }
+}
+
+function normalizeBarcode(value) {
+  return String(value ?? "").trim();
+}
+
+function barcodeLookupKeys(value) {
+  const raw = normalizeBarcode(value);
+  if (!raw) return [];
+  const keys = [raw];
+  if (/^\d+$/.test(raw)) {
+    keys.push(String(Number(raw)));
+    keys.push(raw.padStart(8, "0"), raw.padStart(12, "0"), raw.padStart(13, "0"));
+  }
+  return keys;
 }
 
 function renderLocations(locations) {
@@ -192,19 +234,27 @@ function renderLocations(locations) {
 }
 
 async function getProduct(barcode) {
-  const found = await get("products", barcode);
-  if (found) return found;
+  const normalized = normalizeBarcode(barcode);
+  for (const key of barcodeLookupKeys(normalized)) {
+    const indexed = productIndex.get(key);
+    if (indexed) return indexed;
+  }
+  const found = await get("products", normalized);
+  if (found) {
+    indexProduct(found);
+    return found;
+  }
   const draft = normalProduct({
-    id: `draft-${barcode}`,
-    barcode,
-    name: `Draft ${barcode}`,
+    id: `draft-${normalized}`,
+    barcode: normalized,
+    name: `Draft ${normalized}`,
     notes: "Needs product mapping and BIN",
     draft_status: "draft"
   });
-  await put("products", draft);
+  await cacheProduct(draft);
   await enqueue("draft_product", {
     product_id: draft.id,
-    barcode,
+    barcode: normalized,
     placeholder_name: draft.name,
     notes: draft.notes
   });
@@ -212,11 +262,18 @@ async function getProduct(barcode) {
 }
 
 async function handleScan(barcode, options = {}) {
+  barcode = normalizeBarcode(barcode);
   if (!barcode) return;
   if (state.sleeping && !options.allowWhileSleeping) return;
   resetInactivityTimer();
   const now = Date.now();
-  if (state.mode === "multi" && state.lastBarcode === barcode && now - state.lastScanAt < SCAN_DEBOUNCE_MS) return;
+  if (
+    (state.mode === "multi" || options.debounce) &&
+    state.lastBarcode === barcode &&
+    now - state.lastScanAt < SCAN_DEBOUNCE_MS
+  ) {
+    return;
+  }
   state.lastBarcode = barcode;
   state.lastScanAt = now;
 
@@ -228,10 +285,13 @@ async function handleScan(barcode, options = {}) {
     await addLine(product, "1");
     const count = await currentCount(barcode);
     pulse(`+1 Added\nCurrent count: ${count}`);
+    flashFeedback(product.draft_status === "draft" ? "error" : "success");
     vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
   } else if (product.draft_status === "draft") {
+    flashFeedback("error");
     vibrate([80, 50, 120]);
   } else {
+    flashFeedback("success");
     vibrate(25);
   }
   await saveState();
@@ -324,6 +384,7 @@ async function syncEvents() {
 }
 
 async function currentCount(barcode) {
+  barcode = normalizeBarcode(barcode);
   const rows = await scopedLines();
   const total = rows
     .filter((line) => line.barcode === barcode)
@@ -460,6 +521,15 @@ function pulse(message) {
   pulse.timer = setTimeout(() => els.pulse.classList.add("hidden"), 1300);
 }
 
+function flashFeedback(kind) {
+  const className = kind === "error" ? "feedback-error" : "feedback-success";
+  document.body.classList.remove("feedback-success", "feedback-error");
+  void document.body.offsetWidth;
+  document.body.classList.add(className);
+  clearTimeout(flashFeedback.timer);
+  flashFeedback.timer = setTimeout(() => document.body.classList.remove(className), 360);
+}
+
 function vibrate(pattern) {
   if ("vibrate" in navigator) navigator.vibrate(pattern);
 }
@@ -567,10 +637,24 @@ function setSyncStatus(text) {
   els.syncStatus.textContent = text;
 }
 
+function processManualScan() {
+  const rawInput = els.manualBarcode.value;
+  els.manualBarcode.value = "";
+
+  const barcode = normalizeBarcode(rawInput);
+  if (!barcode) return;
+
+  const now = Date.now();
+  if (now < state.hardwareBlockedUntil) return;
+  state.hardwareBlockedUntil = now + SCAN_DEBOUNCE_MS;
+
+  handleScan(barcode, { allowWhileSleeping: true, debounce: true });
+}
+
 function bindEvents() {
   els.multiMode.addEventListener("click", () => setMode("multi"));
   els.bulkMode.addEventListener("click", () => setMode("bulk"));
-  els.manualScanButton.addEventListener("click", () => handleScan(els.manualBarcode.value.trim(), { allowWhileSleeping: true }));
+  els.manualScanButton.addEventListener("click", processManualScan);
   els.retryCameraButton.addEventListener("click", () => {
     setSyncStatus("Opening camera...");
     startCamera().catch((error) => {
@@ -579,7 +663,10 @@ function bindEvents() {
     });
   });
   els.manualBarcode.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") handleScan(els.manualBarcode.value.trim(), { allowWhileSleeping: true });
+    if (event.key === "Enter") {
+      event.preventDefault();
+      processManualScan();
+    }
   });
   els.keypad.addEventListener("click", (event) => {
     const button = event.target.closest("button");
@@ -635,6 +722,7 @@ async function init() {
   bindEvents();
   setMode(state.mode);
   renderQuantity();
+  await loadProductIndex();
   await syncCatalog();
   await renderLines();
   await syncEvents();

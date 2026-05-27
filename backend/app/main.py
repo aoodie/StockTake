@@ -66,6 +66,10 @@ def get_db() -> sqlite3.Connection:
     return db
 
 
+def normalize_identifier(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def init_db() -> None:
     with get_db() as db:
         db.executescript(
@@ -162,6 +166,8 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> Non
     if event.event_type == "scan":
         product = payload.get("product") or {}
         product_id = product.get("id")
+        barcode = normalize_identifier(payload.get("barcode") or product.get("barcode"))
+        product["barcode"] = normalize_identifier(product.get("barcode") or barcode)
         if product_id:
             db.execute(
                 """
@@ -210,7 +216,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> Non
                 event.session_id,
                 event.location_id,
                 product_id,
-                payload.get("barcode"),
+                barcode,
                 product.get("bin"),
                 product.get("name"),
                 str(payload.get("quantity_decimal", "1")),
@@ -246,6 +252,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> Non
 
     elif event.event_type == "draft_product":
         product_id = payload.get("product_id") or f"draft-{event.local_id}"
+        barcode = normalize_identifier(payload.get("barcode"))
         db.execute(
             """
             INSERT INTO products (
@@ -263,7 +270,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> Non
             """,
             (
                 product_id,
-                payload.get("barcode"),
+                barcode,
                 payload.get("placeholder_name", "Draft Product"),
                 payload.get("photo_url"),
                 payload.get("notes"),
@@ -350,7 +357,8 @@ def catalog() -> dict[str, Any]:
 @app.post("/products")
 def upsert_product(request: ProductUpsertRequest) -> dict[str, Any]:
     init_db()
-    product_id = f"product-{request.barcode}"
+    barcode = normalize_identifier(request.barcode)
+    product_id = f"product-{barcode}"
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as db:
         db.execute(
@@ -373,7 +381,7 @@ def upsert_product(request: ProductUpsertRequest) -> dict[str, Any]:
             """,
             (
                 product_id,
-                request.barcode,
+                barcode,
                 request.bin or "",
                 request.name,
                 request.category,
