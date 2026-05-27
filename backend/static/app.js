@@ -36,7 +36,8 @@ const els = {
   editDialog: document.querySelector("#editDialog"),
   editTitle: document.querySelector("#editTitle"),
   editQuantity: document.querySelector("#editQuantity"),
-  saveEditButton: document.querySelector("#saveEditButton")
+  saveEditButton: document.querySelector("#saveEditButton"),
+  deleteLineButton: document.querySelector("#deleteLineButton")
 };
 
 let db;
@@ -452,7 +453,20 @@ async function confirmQuantity() {
     vibrate([80, 50, 120]);
     return;
   }
-  await addLine(state.currentProduct, quantity);
+  const existingLine = await findExistingLineForProduct(state.currentProduct);
+  if (existingLine) {
+    const addToExisting = window.confirm(
+      `${state.currentProduct.name} has already been scanned in ${state.locationName}. Add this quantity to the existing line?`
+    );
+    if (!addToExisting) {
+      focusQuantity();
+      return;
+    }
+    const newQuantity = addDecimalStrings(existingLine.quantity_decimal, quantity);
+    await editLine(existingLine, newQuantity, "Duplicate scan added to existing line");
+  } else {
+    await addLine(state.currentProduct, quantity);
+  }
   const count = await currentCount(state.currentProduct.barcode);
   pulse(`Saved\nCurrent count: ${count}`);
   flashFeedback("success");
@@ -476,7 +490,7 @@ async function undoLastScan() {
   syncEvents();
 }
 
-async function editLine(line, newQuantity) {
+async function editLine(line, newQuantity, reason = "") {
   if (!isValidQuantity(newQuantity)) return;
   const updated = { ...line, quantity_decimal: normalizeQuantity(newQuantity), sync_status: "pending" };
   await put("lines", updated);
@@ -486,16 +500,43 @@ async function editLine(line, newQuantity) {
     original_quantity: line.quantity_decimal,
     new_quantity: updated.quantity_decimal,
     changed_at: new Date().toISOString(),
-    change_reason: ""
+    change_reason: reason
   });
   await enqueue("quantity_edit", {
     line_id: line.id,
     original_quantity: line.quantity_decimal,
     new_quantity: updated.quantity_decimal,
-    change_reason: ""
+    change_reason: reason
   });
   await renderLines();
   syncEvents();
+}
+
+async function deleteLine(line) {
+  if (!line) return;
+  const confirmed = window.confirm(`Delete scanned line for ${line.product_name} (${line.quantity_decimal})?`);
+  if (!confirmed) return;
+  await del("lines", line.id);
+  await enqueue("delete_line", {
+    line_id: line.id,
+    barcode: line.barcode,
+    product_name: line.product_name,
+    quantity_decimal: line.quantity_decimal
+  });
+  state.editingLine = null;
+  await renderLines();
+  syncEvents();
+}
+
+async function findExistingLineForProduct(product) {
+  const rows = await scopedLines();
+  const lookupKeys = new Set(barcodeLookupKeys(product.barcode));
+  return rows.find((line) => barcodeLookupKeys(line.barcode).some((key) => lookupKeys.has(key)));
+}
+
+function addDecimalStrings(left, right) {
+  const total = Number(left || "0") + Number(right || "0");
+  return String(Math.round(total * 1000000) / 1000000);
 }
 
 async function renderLines() {
@@ -749,6 +790,10 @@ function bindEvents() {
   els.lineSearch.addEventListener("input", renderLines);
   els.saveEditButton.addEventListener("click", async () => {
     await editLine(state.editingLine, els.editQuantity.value);
+    els.editDialog.close();
+  });
+  els.deleteLineButton.addEventListener("click", async () => {
+    await deleteLine(state.editingLine);
     els.editDialog.close();
   });
   els.locationSelect.addEventListener("change", async () => {

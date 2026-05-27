@@ -33,6 +33,7 @@ class SyncEvent(BaseModel):
         "location_change",
         "session_change",
         "undo_scan",
+        "delete_line",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
@@ -249,6 +250,11 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> Non
             """,
             (line_id, original, new, now, payload.get("change_reason")),
         )
+
+    elif event.event_type in ("undo_scan", "delete_line"):
+        line_id = payload.get("line_id")
+        if line_id:
+            db.execute("DELETE FROM stocktake_lines WHERE id = ?", (line_id,))
 
     elif event.event_type == "draft_product":
         product_id = payload.get("product_id") or f"draft-{event.local_id}"
