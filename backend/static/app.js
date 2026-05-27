@@ -1,22 +1,21 @@
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
-const SCAN_DEBOUNCE_MS = 850;
-const CAMERA_DETECT_INTERVAL_MS = 75;
+const SCAN_DEBOUNCE_MS = 700;
+const CAMERA_DETECT_INTERVAL_MS = 35;
 const BARCODE_FORMATS = [
-  "aztec",
-  "codabar",
-  "code_39",
-  "code_93",
   "code_128",
-  "data_matrix",
   "ean_8",
   "ean_13",
-  "itf",
-  "pdf417",
-  "qr_code",
   "upc_a",
   "upc_e"
+];
+const ZXING_FAST_FORMATS = [
+  "EAN_13",
+  "EAN_8",
+  "UPC_A",
+  "UPC_E",
+  "CODE_128"
 ];
 const productIndex = new Map();
 
@@ -75,8 +74,11 @@ let state = {
   pendingBarcode: "",
   lastBarcode: null,
   lastScanAt: 0,
+  lastManualBarcode: null,
+  lastManualScanAt: 0,
   hardwareBlockedUntil: 0,
   sleeping: false,
+  scanInFlight: false,
   editingLine: null,
   detector: null,
   zxingReader: null,
@@ -160,13 +162,14 @@ async function saveState() {
     detector: undefined,
     zxingReader: undefined,
     zxingControls: undefined,
+    scanInFlight: undefined,
     inactivityTimer: undefined
   });
 }
 
 async function restoreState() {
   const saved = await get("state", "active");
-  if (saved) state = { ...state, ...saved, stream: null, detector: null, scanLoopActive: false };
+  if (saved) state = { ...state, ...saved, stream: null, detector: null, scanInFlight: false, scanLoopActive: false };
 }
 
 async function syncCatalog() {
@@ -290,7 +293,8 @@ async function handleScan(barcode, options = {}) {
   barcode = normalizeBarcode(barcode);
   if (!barcode) return;
   if (state.sleeping && !options.allowWhileSleeping) return;
-  if (state.pendingBarcode && state.pendingBarcode === barcode && !options.replacePending) return;
+  if (state.scanInFlight) return;
+  if (state.pendingBarcode && !options.replacePending) return;
   resetInactivityTimer();
   const now = Date.now();
   if (
@@ -302,19 +306,28 @@ async function handleScan(barcode, options = {}) {
   }
   state.lastBarcode = barcode;
   state.lastScanAt = now;
-
-  const product = await getProduct(barcode);
-  state.currentProduct = product;
   state.pendingBarcode = barcode;
-  state.quantity = "";
-  renderProduct(product);
-  renderQuantity();
-  focusQuantity();
+  state.scanInFlight = true;
   beepOnce();
-  pulse("Scanned\nEnter quantity");
-  flashFeedback(product.draft_status === "draft" ? "error" : "success");
-  vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
-  await saveState();
+  try {
+    const product = await getProduct(barcode);
+    state.currentProduct = product;
+    state.quantity = "";
+    renderProduct(product);
+    renderQuantity();
+    focusQuantity();
+    pulse("Scanned\nEnter quantity");
+    flashFeedback(product.draft_status === "draft" ? "error" : "success");
+    vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
+    await saveState();
+  } catch {
+    state.pendingBarcode = "";
+    setSyncStatus("Scan failed");
+    flashFeedback("error");
+    vibrate([80, 50, 120]);
+  } finally {
+    state.scanInFlight = false;
+  }
 }
 
 async function addLine(product, quantity) {
@@ -407,10 +420,9 @@ async function syncEvents() {
 async function currentCount(barcode) {
   barcode = normalizeBarcode(barcode);
   const rows = await scopedLines();
-  const total = rows
+  return rows
     .filter((line) => line.barcode === barcode)
-    .reduce((sum, line) => sum + Number(line.quantity_decimal || "0"), 0);
-  return String(Math.round(total * 10000) / 10000);
+    .reduce((sum, line) => addDecimalStrings(sum, line.quantity_decimal || "0"), "0");
 }
 
 async function scopedLines() {
@@ -435,8 +447,12 @@ function clearProductCard() {
 }
 
 function normalizeQuantity(value) {
+  value = String(value ?? "").trim();
   if (!isValidQuantity(value)) return "0";
-  return String(Number(value));
+  let [whole, fraction = ""] = value.split(".");
+  whole = whole.replace(/^0+(?=\d)/, "") || "0";
+  fraction = fraction.replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 function isValidQuantity(value) {
@@ -503,6 +519,7 @@ async function confirmQuantity() {
 function resetActiveScan() {
   state.quantity = "";
   state.pendingBarcode = "";
+  state.scanInFlight = false;
   state.currentProduct = null;
   renderQuantity();
   clearProductCard();
@@ -565,8 +582,28 @@ async function findExistingLineForProduct(product) {
 }
 
 function addDecimalStrings(left, right) {
-  const total = Number(left || "0") + Number(right || "0");
-  return String(Math.round(total * 1000000) / 1000000);
+  const a = decimalUnits(left);
+  const b = decimalUnits(right);
+  const scale = Math.max(a.scale, b.scale);
+  const total = a.units * 10n ** BigInt(scale - a.scale) + b.units * 10n ** BigInt(scale - b.scale);
+  return formatDecimalUnits(total, scale);
+}
+
+function decimalUnits(value) {
+  const normalized = normalizeQuantity(value);
+  const [whole, fraction = ""] = normalized.split(".");
+  return {
+    units: BigInt(`${whole}${fraction}`),
+    scale: fraction.length
+  };
+}
+
+function formatDecimalUnits(units, scale) {
+  if (scale === 0) return units.toString();
+  const raw = units.toString().padStart(scale + 1, "0");
+  const whole = raw.slice(0, -scale);
+  const fraction = raw.slice(-scale).replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 async function renderLines() {
@@ -717,8 +754,8 @@ async function startCamera() {
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
         focusMode: { ideal: "continuous" }
       },
       audio: false
@@ -737,26 +774,18 @@ async function startCamera() {
 }
 
 async function startScanLoop() {
+  if (await startNativeScanLoop()) return;
+
   if (window.ZXing?.BrowserMultiFormatReader) {
     const hints = new Map();
-    const formats = [
-      window.ZXing.BarcodeFormat?.EAN_13,
-      window.ZXing.BarcodeFormat?.EAN_8,
-      window.ZXing.BarcodeFormat?.UPC_A,
-      window.ZXing.BarcodeFormat?.UPC_E,
-      window.ZXing.BarcodeFormat?.CODE_128,
-      window.ZXing.BarcodeFormat?.CODE_39,
-      window.ZXing.BarcodeFormat?.ITF,
-      window.ZXing.BarcodeFormat?.CODABAR,
-      window.ZXing.BarcodeFormat?.QR_CODE
-    ].filter((format) => format !== undefined);
+    const formats = ZXING_FAST_FORMATS
+      .map((format) => window.ZXing.BarcodeFormat?.[format])
+      .filter((format) => format !== undefined);
     if (window.ZXing.DecodeHintType?.POSSIBLE_FORMATS) {
       hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
     }
-    if (window.ZXing.DecodeHintType?.TRY_HARDER) {
-      hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
-    }
     state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, CAMERA_DETECT_INTERVAL_MS);
+    setSyncStatus("Fast scan running");
     state.zxingControls = await state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
       const barcode = decodedBarcodeText(result);
       if (barcode && !state.sleeping) handleScan(barcode);
@@ -764,15 +793,20 @@ async function startScanLoop() {
     return;
   }
 
+  setSyncStatus("Manual scan available");
+  setAutoScan(false);
+}
+
+async function startNativeScanLoop() {
   if (!("BarcodeDetector" in window)) {
-    setSyncStatus("Manual scan available");
-    setAutoScan(false);
-    return;
+    return false;
   }
   const supportedFormats = await BarcodeDetector.getSupportedFormats?.().catch(() => []) || [];
   const formats = BARCODE_FORMATS.filter((format) => supportedFormats.length === 0 || supportedFormats.includes(format));
+  if (!formats.length) return false;
   state.detector = new BarcodeDetector({ formats });
   state.scanLoopActive = true;
+  setSyncStatus("Fast scan running");
   while (state.scanLoopActive) {
     if (!state.sleeping && els.preview.readyState >= 2) {
       try {
@@ -785,6 +819,7 @@ async function startScanLoop() {
     }
     await new Promise((resolve) => setTimeout(resolve, CAMERA_DETECT_INTERVAL_MS));
   }
+  return true;
 }
 
 function decodedBarcodeText(result) {
@@ -839,8 +874,9 @@ function processManualScan() {
   if (!barcode) return;
 
   const now = Date.now();
-  if (now < state.hardwareBlockedUntil) return;
-  state.hardwareBlockedUntil = now + SCAN_DEBOUNCE_MS;
+  if (state.lastManualBarcode === barcode && now - state.lastManualScanAt < SCAN_DEBOUNCE_MS) return;
+  state.lastManualBarcode = barcode;
+  state.lastManualScanAt = now;
 
   handleScan(barcode, { allowWhileSleeping: true, debounce: true, replacePending: true });
 }
