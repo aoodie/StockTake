@@ -774,8 +774,22 @@ async function startCamera() {
 }
 
 async function startScanLoop() {
-  if (await startNativeScanLoop()) return;
+  state.scanLoopActive = true;
+  const nativeStarted = await startNativeScanLoop();
+  const zxingStarted = await startZxingScanLoop();
 
+  if (nativeStarted || zxingStarted) {
+    const decoders = [nativeStarted ? "Native" : "", zxingStarted ? "ZXing" : ""].filter(Boolean).join(" + ");
+    setSyncStatus(`Fast scan: ${decoders}`);
+    setAutoScan(true);
+    return;
+  }
+
+  setSyncStatus("Manual scan available");
+  setAutoScan(false);
+}
+
+async function startZxingScanLoop() {
   if (window.ZXing?.BrowserMultiFormatReader) {
     const hints = new Map();
     const formats = ZXING_FAST_FORMATS
@@ -785,16 +799,13 @@ async function startScanLoop() {
       hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
     }
     state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, CAMERA_DETECT_INTERVAL_MS);
-    setSyncStatus("Fast scan running");
     state.zxingControls = await state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
       const barcode = decodedBarcodeText(result);
       if (barcode && !state.sleeping) handleScan(barcode);
     });
-    return;
+    return true;
   }
-
-  setSyncStatus("Manual scan available");
-  setAutoScan(false);
+  return false;
 }
 
 async function startNativeScanLoop() {
@@ -805,21 +816,23 @@ async function startNativeScanLoop() {
   const formats = BARCODE_FORMATS.filter((format) => supportedFormats.length === 0 || supportedFormats.includes(format));
   if (!formats.length) return false;
   state.detector = new BarcodeDetector({ formats });
-  state.scanLoopActive = true;
-  setSyncStatus("Fast scan running");
-  while (state.scanLoopActive) {
-    if (!state.sleeping && els.preview.readyState >= 2) {
+  runNativeScanLoop();
+  return true;
+}
+
+async function runNativeScanLoop() {
+  while (state.scanLoopActive && state.detector) {
+    if (!state.sleeping && !state.pendingBarcode && els.preview.readyState >= 2) {
       try {
         const codes = await state.detector.detect(els.preview);
         const barcode = decodedBarcodeText(codes[0]);
         if (barcode) await handleScan(barcode);
       } catch {
-        setSyncStatus("Scanner warming");
+        // Native barcode detection can throw while video focus/exposure settles.
       }
     }
     await new Promise((resolve) => setTimeout(resolve, CAMERA_DETECT_INTERVAL_MS));
   }
-  return true;
 }
 
 function decodedBarcodeText(result) {
