@@ -1,0 +1,14 @@
+[Unit]
+Description=StockTake FastAPI app
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/stocktake/backend
+ExecStart=/opt/stocktake/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8099
+Restart=always
+RestartSec=5
+User=www-data
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

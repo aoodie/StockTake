@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
+    <title>StockTake</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <label for="locationSelect">Location</label>
+          <select id="locationSelect"></select>
+        </div>
+        <div>
+          <label>Period</label>
+          <strong id="periodLabel"></strong>
+        </div>
+        <div class="sync-pill" id="syncStatus">Offline ready</div>
+      </header>
+
+      <section class="scanner-panel" id="scannerPanel">
+        <video id="preview" playsinline muted></video>
+        <div class="scanner-overlay">
+          <div class="auto-scan-badge" id="autoScanBadge">Auto Scan Off</div>
+          <button class="icon-button" id="torchButton" type="button" title="Toggle flashlight">Flash</button>
+          <button class="wake-button hidden" id="wakeButton" type="button">Tap to Wake Scanner</button>
+          <div class="pulse hidden" id="pulse"></div>
+        </div>
+      </section>
+
+      <section class="mode-row" id="modeRow" role="group" aria-label="Counting mode">
+        <button class="mode active" id="multiMode" type="button">Multi-Scan</button>
+        <button class="mode" id="bulkMode" type="button">Bulk-Count</button>
+      </section>
+
+      <section class="product-card">
+        <div class="photo-slot" id="productPhoto">Photo</div>
+        <div>
+          <h1 id="productName">Ready to scan</h1>
+          <p id="productMeta">Scan a barcode or enter one manually.</p>
+          <p id="productBin">BIN: -</p>
+        </div>
+      </section>
+
+      <section class="manual-scan">
+        <input id="manualBarcode" inputmode="numeric" placeholder="Manual barcode">
+        <button id="manualScanButton" type="button">Scan</button>
+        <button id="retryCameraButton" type="button">Retry Camera</button>
+      </section>
+
+      <section class="keypad" id="keypad">
+        <output id="quantityDisplay">0</output>
+        <div class="keys">
+          <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button><button data-action="clear">CLEAR</button>
+          <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><button class="confirm" data-action="confirm">CONFIRM & NEXT</button>
+          <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button><button class="confirm filler" tabindex="-1"></button>
+          <button data-key=".">.</button><button data-key="0">0</button><button data-action="backspace">Del</button><button class="confirm filler" tabindex="-1"></button>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="undoButton" type="button">Undo Last Scan</button>
+        <button id="linesButton" type="button">Scanned Lines</button>
+        <button id="exportButton" type="button">Export Excel</button>
+      </section>
+    </main>
+
+    <dialog id="linesDialog">
+      <form method="dialog" class="dialog-shell">
+        <header>
+          <h2>Scanned Lines</h2>
+          <button value="close">Close</button>
+        </header>
+        <input id="lineSearch" placeholder="Search barcode, product, BIN, draft, missing BIN">
+        <div id="lineList" class="line-list"></div>
+      </form>
+    </dialog>
+
+    <dialog id="editDialog">
+      <form method="dialog" class="dialog-shell edit-shell">
+        <h2 id="editTitle">Edit Quantity</h2>
+        <input id="editQuantity" inputmode="decimal" aria-label="New quantity">
+        <button id="saveEditButton" type="button">Save Quantity</button>
+        <button value="cancel">Cancel</button>
+      </form>
+    </dialog>
+
+    <script src="/vendor/zxing-library.min.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

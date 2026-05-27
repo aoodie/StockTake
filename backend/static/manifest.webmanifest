@@ -1,0 +1,9 @@
+{
+  "name": "StockTake",
+  "short_name": "StockTake",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07090c",
+  "theme_color": "#0f172a",
+  "icons": []
+}
