@@ -1,9 +1,10 @@
-const CACHE_NAME = "stocktake-v2";
+const CACHE_NAME = "stocktake-v3";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/styles.css",
-  "/app.js?v=fastscan3",
+  "/app.js?v=diag1",
+  "/frontend-utils.js?v=diag1",
   "/manifest.webmanifest",
   "/vendor/zxing-library.min.js"
 ];

@@ -72,6 +72,7 @@
       <section class="actions">
         <button id="undoButton" type="button">Undo Last Scan</button>
         <button id="linesButton" type="button">Scanned Lines</button>
+        <button id="diagnosticsButton" type="button">Diagnostics</button>
         <button id="exportButton" type="button">Export Excel</button>
       </section>
     </main>
@@ -113,7 +114,19 @@
       </form>
     </dialog>
 
+    <dialog id="diagnosticsDialog">
+      <form method="dialog" class="dialog-shell diagnostics-shell">
+        <header>
+          <h2>Scanner Diagnostics</h2>
+          <button value="close">Close</button>
+        </header>
+        <dl id="diagnosticsList" class="diagnostics-list"></dl>
+        <button id="resetScannerButton" type="button">Reset Scanner</button>
+        <button id="clearCacheButton" class="danger" type="button">Clear Cache & Reload</button>
+      </form>
+    </dialog>
+
     <script src="/vendor/zxing-library.min.js"></script>
-    <script src="/app.js?v=fastscan3" type="module"></script>
+    <script src="/app.js?v=diag1" type="module"></script>
   </body>
 </html>

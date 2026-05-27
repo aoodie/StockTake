@@ -194,7 +194,7 @@ output {
 .keys .confirm { grid-row: span 2; background: #16a34a; }
 .keys .filler { visibility: hidden; }
 
-.actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .actions button:last-child { background: #2563eb; }
 
 dialog {
@@ -263,6 +263,29 @@ dialog {
 .duplicate-grid strong { font-size: 24px; }
 .duplicate-shell button:first-of-type { background: #16a34a; }
 .duplicate-shell button:nth-of-type(2) { background: #2563eb; }
+.diagnostics-list {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #111827;
+}
+.diagnostics-list dt {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.diagnostics-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  color: #f8fafc;
+}
+.diagnostics-shell button:nth-last-child(2) { background: #2563eb; }
 
 @media (max-width: 560px) {
   .app-shell { gap: 8px; padding: 10px; }
@@ -274,7 +297,7 @@ dialog {
   .photo-slot { width: 72px; height: 72px; }
   h1 { font-size: 18px; }
   p { margin-top: 4px; }
-  .actions { grid-template-columns: 1fr; }
+  .actions { grid-template-columns: 1fr 1fr; }
   .manual-scan { grid-template-columns: 1fr auto; }
   .manual-panel summary, #retryCameraButton { min-height: 46px; }
   #retryCameraButton { min-width: 116px; }
@@ -293,6 +316,7 @@ dialog {
     margin: auto 0 0;
     border-radius: 12px 12px 0 0;
   }
+  .diagnostics-list { grid-template-columns: 1fr; }
   .line-list { max-height: 68vh; }
 }
 

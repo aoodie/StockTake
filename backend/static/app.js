@@ -1,22 +1,21 @@
+import {
+  APP_VERSION,
+  CACHE_NAME,
+  BARCODE_FORMATS,
+  CAMERA_DETECT_INTERVAL_MS,
+  SCAN_DEBOUNCE_MS,
+  ZXING_FAST_FORMATS,
+  addDecimalStrings,
+  barcodeLookupKeys,
+  decodedBarcodeText,
+  isValidQuantity,
+  normalizeBarcode,
+  normalizeQuantity
+} from "./frontend-utils.js?v=diag1";
+
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
-const SCAN_DEBOUNCE_MS = 700;
-const CAMERA_DETECT_INTERVAL_MS = 35;
-const BARCODE_FORMATS = [
-  "code_128",
-  "ean_8",
-  "ean_13",
-  "upc_a",
-  "upc_e"
-];
-const ZXING_FAST_FORMATS = [
-  "EAN_13",
-  "EAN_8",
-  "UPC_A",
-  "UPC_E",
-  "CODE_128"
-];
 const productIndex = new Map();
 
 const els = {
@@ -58,10 +57,55 @@ const els = {
   duplicateExisting: document.querySelector("#duplicateExisting"),
   duplicateNew: document.querySelector("#duplicateNew"),
   duplicateAddButton: document.querySelector("#duplicateAddButton"),
-  duplicateEditButton: document.querySelector("#duplicateEditButton")
+  duplicateEditButton: document.querySelector("#duplicateEditButton"),
+  diagnosticsButton: document.querySelector("#diagnosticsButton"),
+  diagnosticsDialog: document.querySelector("#diagnosticsDialog"),
+  diagnosticsList: document.querySelector("#diagnosticsList"),
+  resetScannerButton: document.querySelector("#resetScannerButton"),
+  clearCacheButton: document.querySelector("#clearCacheButton")
 };
 
 let db;
+let diagnostics = {
+  app_version: APP_VERSION,
+  cache_name: CACHE_NAME,
+  sync_status: "Offline ready",
+  service_worker: "checking",
+  camera_permission: "unknown",
+  camera_stream: "inactive",
+  camera_track: "none",
+  video_ready: "0",
+  video_size: "-",
+  decoder_mode: "none",
+  supported_formats: "-",
+  decoder_heartbeat: "never",
+  last_raw_barcode: "-",
+  last_accepted_barcode: "-",
+  last_rejected_reason: "-",
+  last_scan_time: "-",
+  last_error: "-"
+};
+
+const DIAGNOSTIC_LABELS = {
+  app_version: "App Version",
+  cache_name: "Cache",
+  sync_status: "Status",
+  service_worker: "Service Worker",
+  camera_permission: "Camera Permission",
+  camera_stream: "Camera Stream",
+  camera_track: "Camera Track",
+  video_ready: "Video Ready",
+  video_size: "Video Size",
+  decoder_mode: "Decoder",
+  supported_formats: "Formats",
+  decoder_heartbeat: "Decoder Heartbeat",
+  last_raw_barcode: "Last Raw Barcode",
+  last_accepted_barcode: "Last Accepted",
+  last_rejected_reason: "Last Rejected",
+  last_scan_time: "Last Scan Time",
+  last_error: "Last Error"
+};
+
 let state = {
   mode: "multi",
   period: today(),
@@ -231,21 +275,6 @@ function indexProduct(product) {
   }
 }
 
-function normalizeBarcode(value) {
-  return String(value ?? "").trim();
-}
-
-function barcodeLookupKeys(value) {
-  const raw = normalizeBarcode(value);
-  if (!raw) return [];
-  const keys = [raw];
-  if (/^\d+$/.test(raw)) {
-    keys.push(String(Number(raw)));
-    keys.push(raw.padStart(8, "0"), raw.padStart(12, "0"), raw.padStart(13, "0"));
-  }
-  return keys;
-}
-
 function renderLocations(locations) {
   els.locationSelect.innerHTML = "";
   for (const location of locations) {
@@ -291,10 +320,23 @@ async function getProduct(barcode) {
 
 async function handleScan(barcode, options = {}) {
   barcode = normalizeBarcode(barcode);
-  if (!barcode) return;
-  if (state.sleeping && !options.allowWhileSleeping) return;
-  if (state.scanInFlight) return;
-  if (state.pendingBarcode && !options.replacePending) return;
+  updateDiagnostics({ last_raw_barcode: barcode || "-", decoder_heartbeat: new Date().toLocaleTimeString() });
+  if (!barcode) {
+    rejectScan("empty barcode");
+    return;
+  }
+  if (state.sleeping && !options.allowWhileSleeping) {
+    rejectScan("scanner asleep");
+    return;
+  }
+  if (state.scanInFlight) {
+    rejectScan("scan already processing");
+    return;
+  }
+  if (state.pendingBarcode && !options.replacePending) {
+    rejectScan(`waiting for quantity: ${state.pendingBarcode}`);
+    return;
+  }
   resetInactivityTimer();
   const now = Date.now();
   if (
@@ -302,12 +344,18 @@ async function handleScan(barcode, options = {}) {
     state.lastBarcode === barcode &&
     now - state.lastScanAt < SCAN_DEBOUNCE_MS
   ) {
+    rejectScan(`debounced ${barcode}`);
     return;
   }
   state.lastBarcode = barcode;
   state.lastScanAt = now;
   state.pendingBarcode = barcode;
   state.scanInFlight = true;
+  updateDiagnostics({
+    last_accepted_barcode: barcode,
+    last_rejected_reason: "-",
+    last_scan_time: new Date().toLocaleTimeString()
+  });
   beepOnce();
   try {
     const product = await getProduct(barcode);
@@ -322,12 +370,17 @@ async function handleScan(barcode, options = {}) {
     await saveState();
   } catch {
     state.pendingBarcode = "";
+    updateDiagnostics({ last_error: "product lookup failed" });
     setSyncStatus("Scan failed");
     flashFeedback("error");
     vibrate([80, 50, 120]);
   } finally {
     state.scanInFlight = false;
   }
+}
+
+function rejectScan(reason) {
+  updateDiagnostics({ last_rejected_reason: reason, last_scan_time: new Date().toLocaleTimeString() });
 }
 
 async function addLine(product, quantity) {
@@ -434,7 +487,6 @@ async function scopedLines() {
 function renderProduct(product) {
   els.productName.textContent = product.name;
   els.productMeta.textContent = [product.category || "Uncategorised", product.size].filter(Boolean).join(" | ");
-  els.productMeta.textContent = [product.category || "Uncategorised", product.size].filter(Boolean).join(" | ");
   els.productBin.textContent = `BIN: ${product.bin || "Missing"}`;
   els.productPhoto.innerHTML = product.photo_url ? `<img alt="" src="${product.photo_url}">` : "Photo";
 }
@@ -444,19 +496,6 @@ function clearProductCard() {
   els.productMeta.textContent = "Scan a barcode or enter one manually.";
   els.productBin.textContent = "BIN: -";
   els.productPhoto.textContent = "Photo";
-}
-
-function normalizeQuantity(value) {
-  value = String(value ?? "").trim();
-  if (!isValidQuantity(value)) return "0";
-  let [whole, fraction = ""] = value.split(".");
-  whole = whole.replace(/^0+(?=\d)/, "") || "0";
-  fraction = fraction.replace(/0+$/, "");
-  return fraction ? `${whole}.${fraction}` : whole;
-}
-
-function isValidQuantity(value) {
-  return value !== "" && value !== "." && /^\d+(\.\d+)?$/.test(value);
 }
 
 function setMode(mode) {
@@ -579,31 +618,6 @@ async function findExistingLineForProduct(product) {
   const rows = await scopedLines();
   const lookupKeys = new Set(barcodeLookupKeys(product.barcode));
   return rows.find((line) => barcodeLookupKeys(line.barcode).some((key) => lookupKeys.has(key)));
-}
-
-function addDecimalStrings(left, right) {
-  const a = decimalUnits(left);
-  const b = decimalUnits(right);
-  const scale = Math.max(a.scale, b.scale);
-  const total = a.units * 10n ** BigInt(scale - a.scale) + b.units * 10n ** BigInt(scale - b.scale);
-  return formatDecimalUnits(total, scale);
-}
-
-function decimalUnits(value) {
-  const normalized = normalizeQuantity(value);
-  const [whole, fraction = ""] = normalized.split(".");
-  return {
-    units: BigInt(`${whole}${fraction}`),
-    scale: fraction.length
-  };
-}
-
-function formatDecimalUnits(units, scale) {
-  if (scale === 0) return units.toString();
-  const raw = units.toString().padStart(scale + 1, "0");
-  const whole = raw.slice(0, -scale);
-  const fraction = raw.slice(-scale).replace(/0+$/, "");
-  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 async function renderLines() {
@@ -739,6 +753,7 @@ function resetInactivityTimer() {
     setAutoScan(false);
     els.scannerPanel.classList.add("sleep");
     els.wakeButton.classList.remove("hidden");
+    updateDiagnostics({ last_rejected_reason: "scanner slept after inactivity" });
     stopTorch();
   }, 180000);
 }
@@ -747,9 +762,11 @@ async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
     setSyncStatus("Manual scan only");
     setAutoScan(false);
+    updateDiagnostics({ camera_stream: "unsupported", last_error: "getUserMedia unavailable" });
     return;
   }
   stopAutoScan();
+  updateDiagnostics({ camera_stream: "opening", decoder_mode: "none", last_error: "-" });
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -760,7 +777,8 @@ async function startCamera() {
       },
       audio: false
     });
-  } catch {
+  } catch (primaryError) {
+    updateDiagnostics({ last_error: `primary camera failed: ${primaryError.name || "error"}` });
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: false
@@ -768,6 +786,7 @@ async function startCamera() {
   }
   els.preview.srcObject = state.stream;
   await els.preview.play();
+  updateDiagnostics(videoDiagnostics());
   setSyncStatus("Auto scan running");
   setAutoScan(true);
   startScanLoop();
@@ -780,11 +799,13 @@ async function startScanLoop() {
 
   if (nativeStarted || zxingStarted) {
     const decoders = [nativeStarted ? "Native" : "", zxingStarted ? "ZXing" : ""].filter(Boolean).join(" + ");
+    updateDiagnostics({ decoder_mode: decoders });
     setSyncStatus(`Fast scan: ${decoders}`);
     setAutoScan(true);
     return;
   }
 
+  updateDiagnostics({ decoder_mode: "none", last_error: "no supported decoder" });
   setSyncStatus("Manual scan available");
   setAutoScan(false);
 }
@@ -801,6 +822,7 @@ async function startZxingScanLoop() {
     state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, CAMERA_DETECT_INTERVAL_MS);
     state.zxingControls = await state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
       const barcode = decodedBarcodeText(result);
+      if (barcode) updateDiagnostics({ last_raw_barcode: barcode, decoder_heartbeat: new Date().toLocaleTimeString() });
       if (barcode && !state.sleeping) handleScan(barcode);
     });
     return true;
@@ -815,6 +837,7 @@ async function startNativeScanLoop() {
   const supportedFormats = await BarcodeDetector.getSupportedFormats?.().catch(() => []) || [];
   const formats = BARCODE_FORMATS.filter((format) => supportedFormats.length === 0 || supportedFormats.includes(format));
   if (!formats.length) return false;
+  updateDiagnostics({ supported_formats: formats.join(", ") });
   state.detector = new BarcodeDetector({ formats });
   runNativeScanLoop();
   return true;
@@ -826,6 +849,8 @@ async function runNativeScanLoop() {
       try {
         const codes = await state.detector.detect(els.preview);
         const barcode = decodedBarcodeText(codes[0]);
+        updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
+        if (barcode) updateDiagnostics({ last_raw_barcode: barcode });
         if (barcode) await handleScan(barcode);
       } catch {
         // Native barcode detection can throw while video focus/exposure settles.
@@ -835,12 +860,6 @@ async function runNativeScanLoop() {
   }
 }
 
-function decodedBarcodeText(result) {
-  if (!result) return "";
-  if (typeof result.getText === "function") return normalizeBarcode(result.getText());
-  return normalizeBarcode(result.rawValue || result.text || result.toString?.() || "");
-}
-
 function stopAutoScan() {
   state.scanLoopActive = false;
   state.zxingControls?.stop?.();
@@ -848,6 +867,7 @@ function stopAutoScan() {
   state.zxingControls = null;
   state.zxingReader = null;
   state.detector = null;
+  updateDiagnostics({ decoder_mode: "stopped" });
 }
 
 function setAutoScan(enabled) {
@@ -877,6 +897,74 @@ function stopTorch() {
 
 function setSyncStatus(text) {
   els.syncStatus.textContent = text;
+  updateDiagnostics({ sync_status: text });
+}
+
+function updateDiagnostics(patch) {
+  diagnostics = { ...diagnostics, ...patch };
+  renderDiagnostics();
+}
+
+function renderDiagnostics() {
+  if (!els.diagnosticsList) return;
+  const liveVideo = videoDiagnostics();
+  const entries = { ...diagnostics, ...liveVideo };
+  els.diagnosticsList.innerHTML = Object.entries(DIAGNOSTIC_LABELS)
+    .map(([key, label]) => `<dt>${label}</dt><dd>${escapeHtml(entries[key] ?? "-")}</dd>`)
+    .join("");
+}
+
+function videoDiagnostics() {
+  const track = state.stream?.getVideoTracks?.()[0];
+  return {
+    camera_stream: state.stream?.active ? "active" : "inactive",
+    camera_track: track ? `${track.label || "camera"} (${track.readyState})` : "none",
+    video_ready: String(els.preview.readyState),
+    video_size: els.preview.videoWidth ? `${els.preview.videoWidth}x${els.preview.videoHeight}` : "-"
+  };
+}
+
+async function refreshCameraPermission() {
+  try {
+    if (!navigator.permissions?.query) {
+      updateDiagnostics({ camera_permission: "unsupported" });
+      return;
+    }
+    const permission = await navigator.permissions.query({ name: "camera" });
+    updateDiagnostics({ camera_permission: permission.state });
+    permission.onchange = () => updateDiagnostics({ camera_permission: permission.state });
+  } catch {
+    updateDiagnostics({ camera_permission: "unknown" });
+  }
+}
+
+async function resetScanner() {
+  setSyncStatus("Resetting scanner...");
+  stopAutoScan();
+  state.pendingBarcode = "";
+  state.scanInFlight = false;
+  updateDiagnostics({
+    decoder_mode: "resetting",
+    last_rejected_reason: "-",
+    last_error: "-"
+  });
+  await startCamera().catch((error) => {
+    setAutoScan(false);
+    updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
+    setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
+  });
+}
+
+async function clearCacheAndReload() {
+  if ("serviceWorker" in navigator) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((registration) => registration.unregister()));
+  }
+  if ("caches" in window) {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((key) => caches.delete(key)));
+  }
+  location.reload();
 }
 
 function processManualScan() {
@@ -887,7 +975,10 @@ function processManualScan() {
   if (!barcode) return;
 
   const now = Date.now();
-  if (state.lastManualBarcode === barcode && now - state.lastManualScanAt < SCAN_DEBOUNCE_MS) return;
+  if (state.lastManualBarcode === barcode && now - state.lastManualScanAt < SCAN_DEBOUNCE_MS) {
+    rejectScan(`manual debounced ${barcode}`);
+    return;
+  }
   state.lastManualBarcode = barcode;
   state.lastManualScanAt = now;
 
@@ -902,6 +993,7 @@ function bindEvents() {
     setSyncStatus("Opening camera...");
     startCamera().catch((error) => {
       setAutoScan(false);
+      updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
       setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
     });
   });
@@ -965,6 +1057,12 @@ function bindEvents() {
   els.exportButton.addEventListener("click", () => {
     window.location.href = `/export/${encodeURIComponent(state.sessionId)}`;
   });
+  els.diagnosticsButton.addEventListener("click", () => {
+    renderDiagnostics();
+    els.diagnosticsDialog.showModal();
+  });
+  els.resetScannerButton.addEventListener("click", resetScanner);
+  els.clearCacheButton.addEventListener("click", clearCacheAndReload);
   window.addEventListener("online", () => {
     syncCatalog();
     syncEvents();
@@ -972,7 +1070,8 @@ function bindEvents() {
 }
 
 async function init() {
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  await initServiceWorker();
+  await refreshCameraPermission();
   db = await openDb();
   await restoreState();
   els.periodLabel.textContent = state.period;
@@ -987,8 +1086,29 @@ async function init() {
   resetInactivityTimer();
   startCamera().catch((error) => {
     setAutoScan(false);
+    updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
     setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
   });
 }
 
 init();
+
+async function initServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    updateDiagnostics({ service_worker: "unsupported" });
+    return;
+  }
+  try {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    updateDiagnostics({ service_worker: registration.active ? "active" : "installing" });
+    if (registration.waiting) updateDiagnostics({ service_worker: "update waiting" });
+    registration.addEventListener("updatefound", () => {
+      updateDiagnostics({ service_worker: "update found" });
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      updateDiagnostics({ service_worker: "controller changed" });
+    });
+  } catch (error) {
+    updateDiagnostics({ service_worker: "registration failed", last_error: error.message || "sw failed" });
+  }
+}
