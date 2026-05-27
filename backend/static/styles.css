@@ -265,20 +265,28 @@ dialog {
 .duplicate-shell button:nth-of-type(2) { background: #2563eb; }
 
 @media (max-width: 560px) {
+  .app-shell { gap: 8px; padding: 10px; }
   .topbar { grid-template-columns: 1fr 1fr; }
-  .sync-pill { grid-column: 1 / -1; }
+  .sync-pill { grid-column: 1 / -1; padding: 8px 10px; }
+  button { min-height: 48px; }
+  .mode-row { gap: 7px; }
+  .product-card { grid-template-columns: 72px 1fr; gap: 10px; padding: 10px; }
+  .photo-slot { width: 72px; height: 72px; }
+  h1 { font-size: 18px; }
+  p { margin-top: 4px; }
   .actions { grid-template-columns: 1fr; }
   .manual-scan { grid-template-columns: 1fr auto; }
-  .manual-panel summary, #retryCameraButton { min-height: 48px; }
+  .manual-panel summary, #retryCameraButton { min-height: 46px; }
   #retryCameraButton { min-width: 116px; }
   .manual-controls { grid-template-columns: 1fr; }
-  .scanner-panel { height: clamp(132px, 22vh, 180px); }
+  .scanner-panel { height: clamp(118px, 18vh, 150px); }
   .auto-scan-badge { top: 8px; left: 8px; padding: 8px 10px; }
   .icon-button { top: 8px; right: 8px; min-height: 44px; min-width: 68px; }
   .pulse { left: 10px; right: 10px; bottom: 10px; padding: 10px; font-size: 18px; }
-  #quantityInput { min-height: 52px; font-size: 34px; }
+  .keypad { gap: 7px; }
+  #quantityInput { min-height: 48px; font-size: 32px; }
   .keys { gap: 7px; }
-  .keys button { min-height: 50px; font-size: 19px; }
+  .keys button { min-height: 44px; font-size: 18px; }
   dialog {
     width: 100%;
     max-width: none;
