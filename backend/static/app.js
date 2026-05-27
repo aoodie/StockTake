@@ -705,7 +705,8 @@ async function startScanLoop() {
     }
     state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, CAMERA_DETECT_INTERVAL_MS);
     state.zxingControls = await state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
-      if (result?.text && !state.sleeping) handleScan(result.text);
+      const barcode = decodedBarcodeText(result);
+      if (barcode && !state.sleeping) handleScan(barcode);
     });
     return;
   }
@@ -723,13 +724,20 @@ async function startScanLoop() {
     if (!state.sleeping && els.preview.readyState >= 2) {
       try {
         const codes = await state.detector.detect(els.preview);
-        if (codes[0]?.rawValue) await handleScan(codes[0].rawValue);
+        const barcode = decodedBarcodeText(codes[0]);
+        if (barcode) await handleScan(barcode);
       } catch {
         setSyncStatus("Scanner warming");
       }
     }
     await new Promise((resolve) => setTimeout(resolve, CAMERA_DETECT_INTERVAL_MS));
   }
+}
+
+function decodedBarcodeText(result) {
+  if (!result) return "";
+  if (typeof result.getText === "function") return normalizeBarcode(result.getText());
+  return normalizeBarcode(result.rawValue || result.text || result.toString?.() || "");
 }
 
 function stopAutoScan() {
