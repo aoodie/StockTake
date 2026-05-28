@@ -16,10 +16,11 @@
           <select id="locationSelect"></select>
         </div>
         <div>
-          <label>Period</label>
+          <label>Session</label>
           <strong id="periodLabel"></strong>
+          <button class="link-button" id="changeSessionButton" type="button">Change</button>
         </div>
-        <div class="sync-pill" id="syncStatus">Offline ready</div>
+        <div class="sync-pill" id="syncStatus" role="status" aria-live="polite">Offline ready</div>
       </header>
 
       <section class="scanner-panel" id="scannerPanel">
@@ -77,6 +78,19 @@
       </section>
     </main>
 
+    <dialog id="sessionDialog" class="blocking-dialog">
+      <form method="dialog" class="dialog-shell session-shell">
+        <h2>Start Stocktake</h2>
+        <label for="sessionPreset">Saved session</label>
+        <select id="sessionPreset"></select>
+        <label for="sessionCodeInput">Session code</label>
+        <input id="sessionCodeInput" autocomplete="off" placeholder="session-2026-05-28">
+        <label for="sessionLocationSelect">Location</label>
+        <select id="sessionLocationSelect"></select>
+        <button id="startSessionButton" type="button">Start Scanning</button>
+      </form>
+    </dialog>
+
     <dialog id="linesDialog">
       <form method="dialog" class="dialog-shell">
         <header>
@@ -123,6 +137,18 @@
         <dl id="diagnosticsList" class="diagnostics-list"></dl>
         <button id="resetScannerButton" type="button">Reset Scanner</button>
         <button id="clearCacheButton" class="danger" type="button">Clear Cache & Reload</button>
+      </form>
+    </dialog>
+
+    <dialog id="exportDialog">
+      <form method="dialog" class="dialog-shell export-shell">
+        <header>
+          <h2>Export Review</h2>
+          <button value="close">Close</button>
+        </header>
+        <div id="exportSummary" class="export-summary"></div>
+        <div id="missingBinList" class="missing-bin-list"></div>
+        <a id="downloadExportLink" class="download-button hidden" href="#">Download Excel</a>
       </form>
     </dialog>
 

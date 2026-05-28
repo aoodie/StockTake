@@ -42,8 +42,10 @@ uvicorn app.main:app --reload
 Important endpoints:
 
 - `GET /`: serves the web stocktake app.
+- `GET /admin`: desktop admin for product tasks, products, sessions, and export review.
 - `GET /catalog`: downloads products, locations, sessions, and catalog version metadata.
 - `POST /products`: creates/updates product catalog rows.
+- `POST /sessions`: creates/updates a stocktake session code.
 - `POST /sync/events`: accepts queued browser events idempotently.
 - `GET /export/{session_id}`: downloads the locked v1 Excel workbook.
 - `GET /pre-export/{session_id}`: shows missing BIN validation counts.
@@ -55,6 +57,21 @@ Excel export columns:
 `Session ID`, `Session Name`, `Location`, `BIN`, `Barcode`, `Product Name`, `Category`, `Size`, `Quantity`, `Unit`, `Draft Status`, `Missing BIN Flag`, `Counted At`, `Device ID`, `Notes`
 
 `quantity = 0` is exported as `0`, never blank.
+
+## Admin and enrichment
+
+Unknown scanned barcodes create draft products and product tasks. Open `/admin` from a desktop browser to review tasks, run online enrichment, approve product details, manage sessions, and run export preflight checks.
+
+Set these environment variables in production:
+
+- `ADMIN_PASSWORD`: admin login password. If unset, a random password is generated in `backend/data/admin_password.txt`.
+- `ADMIN_SECRET`: cookie signing secret. Defaults to the admin password.
+- `OPENAI_API_KEY`: optional; enables LLM cleanup of online barcode lookup results.
+- `OPENAI_MODEL`: optional model override for enrichment. Defaults to `gpt-4.1-mini`.
+
+Approved product photos are saved under `backend/data/product-images`, with the product record storing the served image URL and source metadata.
+
+For local development, set `ADMIN_PASSWORD=stocktake-admin` if you want the predictable development password.
 
 ## VPS deployment target
 

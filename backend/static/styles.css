@@ -21,7 +21,19 @@ button {
 button.danger {
   background: #991b1b;
 }
+button.link-button {
+  min-height: 0;
+  padding: 4px 0 0;
+  color: #93c5fd;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
 button:active { transform: translateY(1px); }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
 
 .app-shell {
   width: min(760px, 100%);
@@ -204,6 +216,9 @@ dialog {
   color: #f8fafc;
   background: #0f172a;
 }
+.blocking-dialog::backdrop {
+  background: #020617;
+}
 .dialog-shell { display: grid; gap: 12px; }
 .dialog-shell header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .line-list { display: grid; gap: 8px; max-height: 60vh; overflow: auto; }
@@ -286,6 +301,56 @@ dialog {
   color: #f8fafc;
 }
 .diagnostics-shell button:nth-last-child(2) { background: #2563eb; }
+.session-shell {
+  max-width: 420px;
+  margin: 0 auto;
+}
+.export-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.export-metric, .missing-bin-row {
+  padding: 10px;
+  border-radius: 8px;
+  background: #111827;
+}
+.export-metric span {
+  display: block;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.export-metric strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 24px;
+}
+.missing-bin-list {
+  display: grid;
+  gap: 8px;
+  max-height: 42vh;
+  overflow: auto;
+}
+.missing-bin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px auto;
+  gap: 8px;
+  align-items: center;
+}
+.missing-bin-row strong, .missing-bin-row small { display: block; }
+.missing-bin-row small { color: #94a3b8; }
+.download-button {
+  display: grid;
+  place-items: center;
+  min-height: 52px;
+  border-radius: 8px;
+  color: #f8fafc;
+  background: #2563eb;
+  font-weight: 900;
+  text-decoration: none;
+}
 
 @media (max-width: 560px) {
   .app-shell { gap: 8px; padding: 10px; }
@@ -318,6 +383,15 @@ dialog {
   }
   .diagnostics-list { grid-template-columns: 1fr; }
   .line-list { max-height: 68vh; }
+  .export-summary, .missing-bin-row { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @keyframes success-flash {

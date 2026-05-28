@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101820">
+    <title>StockTake Admin</title>
+    <link rel="stylesheet" href="/admin.css">
+  </head>
+  <body>
+    <main class="admin-shell">
+      <aside class="sidebar">
+        <div>
+          <h1>StockTake Admin</h1>
+          <p id="adminStatus">Checking access</p>
+        </div>
+        <nav class="tabs" aria-label="Admin sections">
+          <button class="active" data-view="tasks" type="button">Tasks</button>
+          <button data-view="products" type="button">Products</button>
+          <button data-view="sessions" type="button">Sessions</button>
+          <button data-view="export" type="button">Export</button>
+        </nav>
+        <button id="logoutButton" class="ghost" type="button">Log out</button>
+      </aside>
+
+      <section id="loginView" class="login-panel">
+        <form id="loginForm" class="login-form">
+          <h2>Admin Login</h2>
+          <label for="adminPassword">Password</label>
+          <input id="adminPassword" type="password" autocomplete="current-password" required>
+          <button type="submit">Log In</button>
+          <p id="loginError" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="appView" class="workspace hidden">
+        <header class="summary-grid" id="summaryGrid" aria-label="Summary"></header>
+
+        <section class="view" id="tasksView">
+          <div class="section-head">
+            <h2>Product Tasks</h2>
+            <button id="refreshTasksButton" type="button">Refresh</button>
+          </div>
+          <div id="taskList" class="task-list"></div>
+        </section>
+
+        <section class="view hidden" id="productsView">
+          <div class="section-head">
+            <h2>Products</h2>
+            <form id="productSearchForm" class="search-form">
+              <input id="productSearch" placeholder="Search name, barcode, BIN">
+              <button type="submit">Search</button>
+            </form>
+          </div>
+          <div id="productList" class="data-list"></div>
+        </section>
+
+        <section class="view hidden" id="sessionsView">
+          <div class="section-head">
+            <h2>Sessions</h2>
+          </div>
+          <form id="sessionForm" class="inline-form">
+            <input id="sessionId" placeholder="session-2026-05-28" required>
+            <input id="sessionName" placeholder="Display name" required>
+            <input id="sessionDate" type="date" required>
+            <button type="submit">Save Session</button>
+          </form>
+          <div id="sessionList" class="data-list"></div>
+        </section>
+
+        <section class="view hidden" id="exportView">
+          <div class="section-head">
+            <h2>Export Review</h2>
+            <select id="exportSession"></select>
+          </div>
+          <div id="exportReview" class="export-review"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="taskDialog">
+      <form method="dialog" class="dialog-shell">
+        <header>
+          <h2 id="taskDialogTitle">Review Product</h2>
+          <button value="close">Close</button>
+        </header>
+        <div class="edit-grid">
+          <label>Name<input id="taskName"></label>
+          <label>BIN<input id="taskBin"></label>
+          <label>Category<input id="taskCategory"></label>
+          <label>Size<input id="taskSize"></label>
+          <label>Unit<input id="taskUnit"></label>
+          <label>Photo URL<input id="taskPhoto"></label>
+          <label class="wide">Notes<textarea id="taskNotes"></textarea></label>
+        </div>
+        <div id="taskSources" class="source-list"></div>
+        <button id="approveTaskButton" type="button">Approve Product</button>
+      </form>
+    </dialog>
+
+    <script src="/admin.js" type="module"></script>
+  </body>
+</html>

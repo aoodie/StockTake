@@ -16,7 +16,10 @@ import {
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
+const SESSION_MEMORY_PREFIX = "stocktake-session";
 const productIndex = new Map();
+let catalogSessions = [];
+let catalogLocations = [];
 
 const els = {
   preview: document.querySelector("#preview"),
@@ -43,7 +46,13 @@ const els = {
   exportButton: document.querySelector("#exportButton"),
   locationSelect: document.querySelector("#locationSelect"),
   periodLabel: document.querySelector("#periodLabel"),
+  changeSessionButton: document.querySelector("#changeSessionButton"),
   syncStatus: document.querySelector("#syncStatus"),
+  sessionDialog: document.querySelector("#sessionDialog"),
+  sessionPreset: document.querySelector("#sessionPreset"),
+  sessionCodeInput: document.querySelector("#sessionCodeInput"),
+  sessionLocationSelect: document.querySelector("#sessionLocationSelect"),
+  startSessionButton: document.querySelector("#startSessionButton"),
   linesDialog: document.querySelector("#linesDialog"),
   lineSearch: document.querySelector("#lineSearch"),
   lineList: document.querySelector("#lineList"),
@@ -62,7 +71,11 @@ const els = {
   diagnosticsDialog: document.querySelector("#diagnosticsDialog"),
   diagnosticsList: document.querySelector("#diagnosticsList"),
   resetScannerButton: document.querySelector("#resetScannerButton"),
-  clearCacheButton: document.querySelector("#clearCacheButton")
+  clearCacheButton: document.querySelector("#clearCacheButton"),
+  exportDialog: document.querySelector("#exportDialog"),
+  exportSummary: document.querySelector("#exportSummary"),
+  missingBinList: document.querySelector("#missingBinList"),
+  downloadExportLink: document.querySelector("#downloadExportLink")
 };
 
 let db;
@@ -129,11 +142,37 @@ let state = {
   zxingControls: null,
   stream: null,
   scanLoopActive: false,
-  inactivityTimer: null
+  inactivityTimer: null,
+  lastSyncAt: "",
+  lastCatalogSyncAt: ""
 };
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function sessionMemoryKey(period = today()) {
+  return `${SESSION_MEMORY_PREFIX}-${period}`;
+}
+
+function readSessionMemory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(sessionMemoryKey()) || "null");
+    return saved?.period === today() ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionMemory() {
+  localStorage.setItem(sessionMemoryKey(state.period), JSON.stringify({
+    period: state.period,
+    sessionId: state.sessionId,
+    sessionName: state.sessionName,
+    locationId: state.locationId,
+    locationName: state.locationName,
+    selectedAt: new Date().toISOString()
+  }));
 }
 
 function deviceId() {
@@ -225,11 +264,15 @@ async function syncCatalog() {
     for (const product of catalog.products) {
       await cacheProduct(normalProduct(product));
     }
-    if (catalog.locations.length) renderLocations(catalog.locations);
+    catalogSessions = catalog.sessions || [];
+    catalogLocations = catalog.locations || [];
+    if (catalogLocations.length) renderLocations(catalogLocations);
+    renderSessionChoices();
+    state.lastCatalogSyncAt = new Date().toISOString();
     await put("meta", {
       key: "catalog",
       catalog_version: catalog.catalog_version,
-      last_catalog_sync_at: new Date().toISOString()
+      last_catalog_sync_at: state.lastCatalogSyncAt
     });
     setSyncStatus("Catalog synced");
   } catch {
@@ -276,18 +319,110 @@ function indexProduct(product) {
 }
 
 function renderLocations(locations) {
+  catalogLocations = locations;
   els.locationSelect.innerHTML = "";
+  els.sessionLocationSelect.innerHTML = "";
   for (const location of locations) {
     const option = document.createElement("option");
     option.value = location.id;
     option.textContent = location.name;
     els.locationSelect.append(option);
+    els.sessionLocationSelect.append(option.cloneNode(true));
   }
   if (!locations.some((location) => location.id === state.locationId)) {
     state.locationId = locations[0].id;
     state.locationName = locations[0].name;
   }
   els.locationSelect.value = state.locationId;
+  els.sessionLocationSelect.value = state.locationId;
+}
+
+function renderSessionChoices() {
+  els.sessionPreset.innerHTML = "";
+  const sessions = catalogSessions.length ? catalogSessions : [
+    { id: `session-${today()}`, name: today(), period_date: today() }
+  ];
+  for (const session of sessions) {
+    const option = document.createElement("option");
+    option.value = session.id;
+    option.textContent = `${session.name} (${session.id})`;
+    option.dataset.name = session.name;
+    option.dataset.period = session.period_date;
+    els.sessionPreset.append(option);
+  }
+  const active = sessions.find((session) => session.id === state.sessionId) || sessions[0];
+  els.sessionPreset.value = active.id;
+  els.sessionCodeInput.value = active.id;
+}
+
+function renderSessionHeader() {
+  els.periodLabel.textContent = `${state.sessionName || state.sessionId} / ${state.locationName}`;
+}
+
+async function createSessionIfNeeded(sessionId, sessionName, period) {
+  try {
+    await fetch("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: sessionId, name: sessionName, period_date: period })
+    });
+  } catch {
+    setSyncStatus("Session saved locally");
+  }
+}
+
+async function applySessionSelection(sessionId, sessionName, period, locationId, locationName, recordEvent = true) {
+  state.sessionId = sessionId;
+  state.sessionName = sessionName || sessionId;
+  state.period = period || today();
+  state.locationId = locationId;
+  state.locationName = locationName;
+  els.locationSelect.value = locationId;
+  els.sessionLocationSelect.value = locationId;
+  renderSessionHeader();
+  writeSessionMemory();
+  await createSessionIfNeeded(state.sessionId, state.sessionName, state.period);
+  if (recordEvent) {
+    await enqueue("session_change", {
+      session_id: state.sessionId,
+      session_name: state.sessionName,
+      period: state.period
+    });
+  }
+  await saveState();
+  await renderLines();
+}
+
+async function showSessionDialog(force = false) {
+  renderSessionChoices();
+  const saved = !force ? readSessionMemory() : null;
+  if (saved) {
+    await applySessionSelection(
+      saved.sessionId,
+      saved.sessionName,
+      saved.period,
+      saved.locationId,
+      saved.locationName,
+      false
+    );
+    return;
+  }
+  els.sessionDialog.returnValue = "";
+  els.sessionDialog.showModal();
+  await new Promise((resolve) => {
+    const onStart = async () => {
+      const selected = catalogSessions.find((session) => session.id === els.sessionPreset.value);
+      const sessionId = normalizeBarcode(els.sessionCodeInput.value || els.sessionPreset.value || `session-${today()}`);
+      const sessionName = selected?.id === sessionId ? selected.name : sessionId;
+      const period = selected?.id === sessionId ? selected.period_date : today();
+      const locationId = els.sessionLocationSelect.value || state.locationId;
+      const locationName = els.sessionLocationSelect.selectedOptions[0]?.textContent || locationId;
+      await applySessionSelection(sessionId, sessionName, period, locationId, locationName);
+      els.sessionDialog.close("started");
+      resolve();
+    };
+    els.startSessionButton.addEventListener("click", onStart, { once: true });
+  });
 }
 
 async function getProduct(barcode) {
@@ -461,13 +596,35 @@ async function syncEvents() {
     const result = await response.json();
     for (const item of result.events) {
       const event = await get("events", item.local_id);
-      if (event) await put("events", { ...event, sync_status: "synced", server_id: item.server_id });
+      if (event) {
+        await put("events", { ...event, sync_status: "synced", server_id: item.server_id });
+        await markLocalLineSynced(event);
+      }
     }
-    setSyncStatus("Synced");
+    state.lastSyncAt = new Date().toISOString();
+    await saveState();
+    await renderLines();
+    await updateSyncSummary("Synced");
   } catch {
     for (const event of events) await put("events", { ...event, sync_status: "failed", retry_count: event.retry_count + 1 });
-    setSyncStatus(`${events.length} pending`);
+    await updateSyncSummary(`${events.length} pending`);
   }
+}
+
+async function markLocalLineSynced(event) {
+  const lineId = event.payload?.line_id;
+  if (!lineId) return;
+  const line = await get("lines", lineId);
+  if (line) await put("lines", { ...line, sync_status: "synced" });
+}
+
+async function updateSyncSummary(prefix = "") {
+  const events = await all("events");
+  const pending = events.filter((event) => event.sync_status !== "synced").length;
+  const failed = events.filter((event) => event.sync_status === "failed").length;
+  const synced = events.filter((event) => event.sync_status === "synced").length;
+  const label = pending ? `${pending} queued${failed ? `, ${failed} failed` : ""}` : `${synced} synced`;
+  setSyncStatus(prefix ? `${prefix} / ${label}` : label);
 }
 
 async function currentCount(barcode) {
@@ -870,6 +1027,13 @@ function stopAutoScan() {
   updateDiagnostics({ decoder_mode: "stopped" });
 }
 
+function stopCameraStream() {
+  state.stream?.getTracks?.().forEach((track) => track.stop());
+  state.stream = null;
+  els.preview.srcObject = null;
+  updateDiagnostics(videoDiagnostics());
+}
+
 function setAutoScan(enabled) {
   els.autoScanBadge.textContent = enabled ? "Auto Scan On" : "Auto Scan Off";
   els.autoScanBadge.classList.toggle("on", enabled);
@@ -941,6 +1105,7 @@ async function refreshCameraPermission() {
 async function resetScanner() {
   setSyncStatus("Resetting scanner...");
   stopAutoScan();
+  stopCameraStream();
   state.pendingBarcode = "";
   state.scanInFlight = false;
   updateDiagnostics({
@@ -956,6 +1121,8 @@ async function resetScanner() {
 }
 
 async function clearCacheAndReload() {
+  const confirmed = window.confirm("Clear cached app shell and reload? Locally queued stocktake data remains in this browser database.");
+  if (!confirmed) return;
   if ("serviceWorker" in navigator) {
     const registrations = await navigator.serviceWorker.getRegistrations();
     await Promise.all(registrations.map((registration) => registration.unregister()));
@@ -973,6 +1140,14 @@ function processManualScan() {
 
   const barcode = normalizeBarcode(rawInput);
   if (!barcode) return;
+  if (state.pendingBarcode && state.pendingBarcode !== barcode) {
+    const replace = window.confirm("There is an unsaved scanned product. Replace it with this manual barcode?");
+    if (!replace) {
+      focusQuantity();
+      return;
+    }
+    resetActiveScan();
+  }
 
   const now = Date.now();
   if (state.lastManualBarcode === barcode && now - state.lastManualScanAt < SCAN_DEBOUNCE_MS) {
@@ -982,10 +1157,49 @@ function processManualScan() {
   state.lastManualBarcode = barcode;
   state.lastManualScanAt = now;
 
-  handleScan(barcode, { allowWhileSleeping: true, debounce: true, replacePending: true });
+  handleScan(barcode, { allowWhileSleeping: true, debounce: true, replacePending: false });
+}
+
+async function showExportReview() {
+  await syncEvents();
+  els.downloadExportLink.classList.add("hidden");
+  els.missingBinList.innerHTML = "";
+  try {
+    const response = await fetch(`/pre-export/${encodeURIComponent(state.sessionId)}`);
+    if (!response.ok) throw new Error("review failed");
+    const review = await response.json();
+    els.exportSummary.innerHTML = `
+      <div class="export-metric"><span>Lines</span><strong>${escapeHtml(review.line_count || 0)}</strong></div>
+      <div class="export-metric"><span>Missing BIN</span><strong>${escapeHtml(review.missing_bin_count || 0)}</strong></div>
+      <div class="export-metric"><span>Drafts</span><strong>${escapeHtml(review.draft_count || 0)}</strong></div>
+    `;
+    if (review.missing_bin_count) {
+      const rowsResponse = await fetch(`/pre-export/${encodeURIComponent(state.sessionId)}/missing-bin`);
+      const rows = await rowsResponse.json();
+      els.missingBinList.innerHTML = rows.rows.map((row) => `
+        <div class="missing-bin-row">
+          <span>
+            <strong>${escapeHtml(row.product_name || row.barcode)}</strong>
+            <small>${escapeHtml(row.barcode)} | ${escapeHtml(row.location)} | Qty ${escapeHtml(row.quantity_decimal)}</small>
+          </span>
+          <input placeholder="BIN" aria-label="BIN for ${escapeHtml(row.product_name || row.barcode)}">
+          <button data-product-id="${escapeHtml(row.product_id)}" type="button">Save BIN</button>
+        </div>
+      `).join("");
+    }
+    if (!review.missing_bin_count && !review.draft_count && review.line_count) {
+      els.downloadExportLink.href = `/export/${encodeURIComponent(state.sessionId)}`;
+      els.downloadExportLink.classList.remove("hidden");
+    }
+    els.exportDialog.showModal();
+  } catch {
+    els.exportSummary.innerHTML = `<p>Export review is unavailable while offline.</p>`;
+    els.exportDialog.showModal();
+  }
 }
 
 function bindEvents() {
+  els.sessionDialog.addEventListener("cancel", (event) => event.preventDefault());
   els.multiMode.addEventListener("click", () => setMode("multi"));
   els.bulkMode.addEventListener("click", () => setMode("bulk"));
   els.manualScanButton.addEventListener("click", processManualScan);
@@ -1040,11 +1254,31 @@ function bindEvents() {
     els.editDialog.close();
   });
   els.locationSelect.addEventListener("change", async () => {
+    const rows = await scopedLines();
+    if (rows.length && !window.confirm("Switch location for new scans? Existing lines stay in their original location.")) {
+      els.locationSelect.value = state.locationId;
+      return;
+    }
     state.locationId = els.locationSelect.value;
     state.locationName = els.locationSelect.selectedOptions[0]?.textContent || state.locationId;
+    writeSessionMemory();
+    renderSessionHeader();
     await enqueue("location_change", { location_id: state.locationId, location_name: state.locationName });
     await saveState();
     await renderLines();
+  });
+  els.sessionPreset.addEventListener("change", () => {
+    const selected = catalogSessions.find((session) => session.id === els.sessionPreset.value);
+    els.sessionCodeInput.value = selected?.id || els.sessionPreset.value;
+  });
+  els.changeSessionButton.addEventListener("click", async () => {
+    const rows = await scopedLines();
+    if (rows.length && !window.confirm("Change session for new scans? Existing counted lines will stay in the current session.")) {
+      return;
+    }
+    stopAutoScan();
+    await showSessionDialog(true);
+    resetScanner();
   });
   els.torchButton.addEventListener("click", toggleTorch);
   els.wakeButton.addEventListener("click", () => {
@@ -1054,15 +1288,27 @@ function bindEvents() {
     setAutoScan(!!state.stream);
     resetInactivityTimer();
   });
-  els.exportButton.addEventListener("click", () => {
-    window.location.href = `/export/${encodeURIComponent(state.sessionId)}`;
-  });
+  els.exportButton.addEventListener("click", showExportReview);
   els.diagnosticsButton.addEventListener("click", () => {
     renderDiagnostics();
     els.diagnosticsDialog.showModal();
   });
   els.resetScannerButton.addEventListener("click", resetScanner);
   els.clearCacheButton.addEventListener("click", clearCacheAndReload);
+  els.missingBinList.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    const row = button.closest(".missing-bin-row");
+    const bin = row.querySelector("input").value.trim();
+    if (!bin) return;
+    await fetch(`/products/${encodeURIComponent(button.dataset.productId)}/bin`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bin })
+    });
+    await syncCatalog();
+    await showExportReview();
+  });
   window.addEventListener("online", () => {
     syncCatalog();
     syncEvents();
@@ -1074,13 +1320,14 @@ async function init() {
   await refreshCameraPermission();
   db = await openDb();
   await restoreState();
-  els.periodLabel.textContent = state.period;
   renderLocations([{ id: "main-bar", name: "Main Bar" }, { id: "cellar", name: "Cellar" }]);
   bindEvents();
   setMode(state.mode);
   renderQuantity();
   await loadProductIndex();
   await syncCatalog();
+  await showSessionDialog(false);
+  renderSessionHeader();
   await renderLines();
   await syncEvents();
   resetInactivityTimer();

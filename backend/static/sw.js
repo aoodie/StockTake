@@ -1,4 +1,4 @@
-const CACHE_NAME = "stocktake-v3";
+const CACHE_NAME = "stocktake-v4";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -25,6 +25,21 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  const isApiLike = [
+    "/catalog",
+    "/sync/",
+    "/sessions",
+    "/products/",
+    "/pre-export/",
+    "/export/",
+    "/admin",
+    "/product-images/"
+  ].some((path) => url.pathname.startsWith(path));
+  if (isApiLike) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
   event.respondWith(
     fetch(event.request)
       .then((response) => {
