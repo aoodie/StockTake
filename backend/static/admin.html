@@ -3,61 +3,122 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#101820">
+    <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
     <link rel="stylesheet" href="/admin.css">
+    <!-- Google Fonts Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   </head>
   <body>
+    <!-- Floating Toast Notification System -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
     <main class="admin-shell">
+      <!-- Left Sidebar Navigation -->
       <aside class="sidebar">
         <div>
-          <h1>StockTake Admin</h1>
+          <div class="logo-area">
+            <span class="logo-icon">📊</span>
+            <h1>StockTake</h1>
+          </div>
           <p id="adminStatus">Checking access</p>
         </div>
         <nav class="tabs" aria-label="Admin sections">
-          <button class="active" data-view="tasks" type="button">Tasks</button>
-          <button data-view="products" type="button">Products</button>
-          <button data-view="sessions" type="button">Sessions</button>
-          <button data-view="export" type="button">Export</button>
+          <button class="active" data-view="tasks" type="button">
+            <span class="nav-icon">📋</span> Tasks
+          </button>
+          <button data-view="products" type="button">
+            <span class="nav-icon">📦</span> Products
+          </button>
+          <button data-view="sessions" type="button">
+            <span class="nav-icon">📅</span> Sessions
+          </button>
+          <button data-view="export" type="button">
+            <span class="nav-icon">📤</span> Export
+          </button>
         </nav>
         <button id="logoutButton" class="ghost" type="button">Log out</button>
       </aside>
 
+      <!-- Access Restricted / Login screen -->
       <section id="loginView" class="login-panel">
         <form id="loginForm" class="login-form">
-          <h2>Admin Login</h2>
-          <label for="adminPassword">Password</label>
-          <input id="adminPassword" type="password" autocomplete="current-password" required>
-          <button type="submit">Log In</button>
+          <div class="login-header">
+            <h2>Sign In</h2>
+            <p>Access the administrative panel</p>
+          </div>
+          <div class="form-group">
+            <label for="adminPassword">Admin Password</label>
+            <input id="adminPassword" type="password" autocomplete="current-password" placeholder="••••••••" required>
+          </div>
+          <button type="submit" class="primary-btn">Log In</button>
           <p id="loginError" class="error" role="alert"></p>
         </form>
       </section>
 
+      <!-- Authenticated View Workspace -->
       <section id="appView" class="workspace hidden">
+        <!-- Top Metrics Overview -->
         <header class="summary-grid" id="summaryGrid" aria-label="Summary"></header>
 
+        <!-- Tasks Section View -->
         <section class="view" id="tasksView">
           <div class="section-head">
-            <h2>Product Tasks</h2>
-            <button id="refreshTasksButton" type="button">Refresh</button>
+            <div>
+              <h2>Product Tasks</h2>
+              <p class="section-desc">Review and enrich unrecognized product barcodes</p>
+            </div>
+            <button id="refreshTasksButton" type="button">Refresh List</button>
           </div>
           <div id="taskList" class="task-list"></div>
         </section>
 
+        <!-- Products Section View -->
         <section class="view hidden" id="productsView">
           <div class="section-head">
-            <h2>Products</h2>
-            <form id="productSearchForm" class="search-form">
-              <input id="productSearch" placeholder="Search name, barcode, BIN">
-              <button type="submit">Search</button>
-            </form>
+            <div>
+              <h2>Product Catalog</h2>
+              <p class="section-desc">Manage existing items in stocktake catalog</p>
+            </div>
+            <div class="actions-group">
+              <button id="createProductButton" class="accent-btn" type="button">+ Add Product</button>
+              <button id="reviewIssuesButton" class="secondary" type="button">Review Issues</button>
+              <form id="productSearchForm" class="search-form">
+                <input id="productSearch" placeholder="Search name, barcode, BIN...">
+                <button type="submit">Search</button>
+              </form>
+            </div>
           </div>
+
+          <!-- Bulk Operations Command Bar -->
+          <div id="bulkActionPanel" class="bulk-panel hidden">
+            <span id="selectedCountText">0 selected</span>
+            <div class="bulk-actions">
+              <input id="bulkBin" placeholder="BIN (e.g. A-12)" class="compact-input">
+              <input id="bulkCategory" placeholder="Category" class="compact-input">
+              <button id="bulkUpdateButton" class="secondary" type="button">Update</button>
+              <button id="bulkDeleteButton" class="warning" type="button">Delete</button>
+            </div>
+          </div>
+
           <div id="productList" class="data-list"></div>
+          <div id="productIssueList" class="task-list hidden"></div>
+          
+          <div class="pagination-bar">
+            <span id="productsCountText" class="meta">Showing 0 of 0 products</span>
+            <button id="loadMoreProductsButton" class="secondary hidden" type="button">Load More</button>
+          </div>
         </section>
 
+        <!-- Sessions Section View -->
         <section class="view hidden" id="sessionsView">
           <div class="section-head">
-            <h2>Sessions</h2>
+            <div>
+              <h2>Stocktake Sessions</h2>
+              <p class="section-desc">Manage count periods and active inventory sessions</p>
+            </div>
           </div>
           <form id="sessionForm" class="inline-form">
             <input id="sessionId" placeholder="session-2026-05-28" required>
@@ -68,9 +129,13 @@
           <div id="sessionList" class="data-list"></div>
         </section>
 
+        <!-- Export Section View -->
         <section class="view hidden" id="exportView">
           <div class="section-head">
-            <h2>Export Review</h2>
+            <div>
+              <h2>Export Review</h2>
+              <p class="section-desc">Validate BINs and draft details before Excel export</p>
+            </div>
             <select id="exportSession"></select>
           </div>
           <div id="exportReview" class="export-review"></div>
@@ -78,26 +143,87 @@
       </section>
     </main>
 
+    <!-- Dialog: Review & Enrich Barcode Task -->
     <dialog id="taskDialog">
       <form method="dialog" class="dialog-shell">
         <header>
           <h2 id="taskDialogTitle">Review Product</h2>
-          <button value="close">Close</button>
+          <button value="close" class="close-dialog-btn" type="button">×</button>
         </header>
-        <div class="edit-grid">
-          <label>Name<input id="taskName"></label>
-          <label>BIN<input id="taskBin"></label>
-          <label>Category<input id="taskCategory"></label>
-          <label>Size<input id="taskSize"></label>
-          <label>Unit<input id="taskUnit"></label>
-          <label>Photo URL<input id="taskPhoto"></label>
-          <label class="wide">Notes<textarea id="taskNotes"></textarea></label>
+        <div class="dialog-content">
+          <div id="taskBarcodeLock" class="locked-barcode"></div>
+          <div class="edit-grid">
+            <label>Product Name<input id="taskName" required></label>
+            <label>BIN Assignment<input id="taskBin" placeholder="e.g. A-12"></label>
+            <label>Category<input id="taskCategory"></label>
+            <label>Container Size<input id="taskSize" placeholder="e.g. 70cl"></label>
+            <label>Count Unit<input id="taskUnit" placeholder="e.g. bottle"></label>
+            <label>Photo URL<input id="taskPhoto"></label>
+            <label class="wide">Notes<textarea id="taskNotes" placeholder="Additional details..."></textarea></label>
+          </div>
+          <div id="taskPhotoPreview" class="photo-preview hidden"></div>
+          <div id="taskSources" class="source-list"></div>
         </div>
-        <div id="taskSources" class="source-list"></div>
-        <button id="approveTaskButton" type="button">Approve Product</button>
+        <footer>
+          <button id="rejectTaskButton" class="warning" type="button">Reject & Delete</button>
+          <button id="approveTaskButton" class="primary-btn" type="button">Approve Catalog Product</button>
+        </footer>
       </form>
     </dialog>
 
-    <script src="/admin.js" type="module"></script>
+    <!-- Dialog: Create/Edit Catalog Product -->
+    <dialog id="productDialog">
+      <form id="productDialogForm" class="dialog-shell">
+        <header>
+          <h2 id="productDialogTitle">Create Product</h2>
+          <button value="close" class="close-dialog-btn" type="button">×</button>
+        </header>
+        <div class="dialog-content">
+          <div class="edit-grid">
+            <input type="hidden" id="pDialogId">
+            <label>Barcode<input id="pDialogBarcode"><span id="productLookupStatus" class="field-note"></span></label>
+            <label>Product Name *<input id="pDialogName" required></label>
+            <label>BIN Assignment<input id="pDialogBin" placeholder="e.g. A-12"></label>
+            <label>Category<input id="pDialogCategory"></label>
+            <label>Container Size<input id="pDialogSize" placeholder="e.g. 70cl"></label>
+            <label>Count Unit<input id="pDialogUnit" placeholder="e.g. bottle"></label>
+            <label class="wide">Photo URL<input id="pDialogPhoto"></label>
+            <label class="wide">Notes<textarea id="pDialogNotes" placeholder="Additional details..."></textarea></label>
+          </div>
+          <div id="productPhotoPreview" class="photo-preview hidden"></div>
+        </div>
+        <footer>
+          <button id="cancelProductDialogButton" value="close" type="button" class="secondary">Cancel</button>
+          <button id="saveProductDialogButton" class="primary-btn" type="button">Save Changes</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <!-- Dialog: Product Master Detail -->
+    <dialog id="productDetailDialog">
+      <form id="productDetailForm" class="dialog-shell">
+        <header>
+          <h2 id="productDetailTitle">Product Detail</h2>
+          <button value="close" class="close-dialog-btn" type="button">×</button>
+        </header>
+        <div class="dialog-content">
+          <div id="productDetailSummary" class="source-list"></div>
+          <div class="edit-grid">
+            <label>Alias Barcode<input id="aliasBarcode" placeholder="Bottle/case/supplier barcode"></label>
+            <label>Alias Label<input id="aliasLabel" placeholder="Case barcode"></label>
+            <label>Merge From Product ID<input id="mergeSourceProductId" placeholder="product-..."></label>
+            <label>Merge Into<input id="mergeTargetProductId" disabled></label>
+          </div>
+          <div id="productAliasList" class="source-list"></div>
+          <div id="productAuditList" class="source-list"></div>
+        </div>
+        <footer>
+          <button id="addAliasButton" class="secondary" type="button">Add Alias</button>
+          <button id="mergeProductButton" class="warning" type="button">Merge Duplicate</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/admin.js?v=product-enrich-1" type="module"></script>
   </body>
 </html>
