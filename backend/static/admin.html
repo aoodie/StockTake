@@ -32,6 +32,9 @@
           <button data-view="products" type="button">
             <span class="nav-icon">📦</span> Products
           </button>
+          <button data-view="mapping" type="button">
+            <span class="nav-icon">🏷️</span> Mapping
+          </button>
           <button data-view="sessions" type="button">
             <span class="nav-icon">📅</span> Sessions
           </button>
@@ -109,6 +112,49 @@
           <div class="pagination-bar">
             <span id="productsCountText" class="meta">Showing 0 of 0 products</span>
             <button id="loadMoreProductsButton" class="secondary hidden" type="button">Load More</button>
+          </div>
+        </section>
+
+        <!-- Barcode Mapping View -->
+        <section class="view hidden" id="mappingView">
+          <div class="section-head">
+            <div>
+              <h2>Barcode Mapping</h2>
+              <p class="section-desc">Pair physical bottle, case, and supplier barcodes to imported products.</p>
+            </div>
+            <form id="mappingSearchForm" class="search-form">
+              <input id="mappingSearch" placeholder="Search product, BIN, PID...">
+              <button type="submit">Search</button>
+            </form>
+          </div>
+          <div class="mapping-toolbar">
+            <label class="toggle-row">
+              <input id="mappingOnlyMissing" type="checkbox" checked>
+              <span>Needs barcode only</span>
+            </label>
+            <span id="mappingCountText" class="meta">0 products</span>
+            <button id="mappingReloadButton" class="secondary" type="button">Reload Queue</button>
+          </div>
+          <section class="mapping-console">
+            <div id="mappingActiveCard" class="mapping-active"></div>
+            <form id="mappingBarcodeForm" class="mapping-capture">
+              <label for="mappingBarcodeInput">Scanned barcode</label>
+              <div class="mapping-input-row">
+                <input id="mappingBarcodeInput" inputmode="numeric" autocomplete="off" placeholder="Scan or type barcode">
+                <button id="mappingSaveButton" class="primary-btn" type="submit">Save Alias</button>
+              </div>
+              <input id="mappingLabelInput" placeholder="Label, e.g. bottle barcode" value="Mapped barcode">
+              <p id="mappingLookupStatus" class="field-note"></p>
+              <div class="mapping-actions">
+                <button id="mappingSkipButton" class="secondary" type="button">Skip / Next</button>
+                <button id="mappingOpenDetailButton" class="secondary" type="button">Open Product Detail</button>
+              </div>
+            </form>
+          </section>
+          <div id="mappingProductList" class="mapping-list"></div>
+          <div class="pagination-bar">
+            <span id="mappingPageText" class="meta">Showing 0 of 0</span>
+            <button id="mappingLoadMoreButton" class="secondary hidden" type="button">Load More</button>
           </div>
         </section>
 
@@ -254,6 +300,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=pw-flow-1" type="module"></script>
+    <script src="/admin.js?v=mapping-1" type="module"></script>
   </body>
 </html>

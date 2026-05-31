@@ -12,7 +12,14 @@ const state = {
   productsLimit: 50,
   productsOffset: 0,
   productsTotal: 0,
-  selectedProductIds: []
+  selectedProductIds: [],
+  mappingProducts: [],
+  mappingLimit: 50,
+  mappingOffset: 0,
+  mappingTotal: 0,
+  selectedMappingProductId: null,
+  mappingLookupTimer: null,
+  mappingSearchTimer: null
 };
 
 const els = {
@@ -31,6 +38,21 @@ const els = {
   productSearchForm: document.querySelector("#productSearchForm"),
   productSearch: document.querySelector("#productSearch"),
   productList: document.querySelector("#productList"),
+  mappingSearchForm: document.querySelector("#mappingSearchForm"),
+  mappingSearch: document.querySelector("#mappingSearch"),
+  mappingOnlyMissing: document.querySelector("#mappingOnlyMissing"),
+  mappingReloadButton: document.querySelector("#mappingReloadButton"),
+  mappingCountText: document.querySelector("#mappingCountText"),
+  mappingActiveCard: document.querySelector("#mappingActiveCard"),
+  mappingBarcodeForm: document.querySelector("#mappingBarcodeForm"),
+  mappingBarcodeInput: document.querySelector("#mappingBarcodeInput"),
+  mappingLabelInput: document.querySelector("#mappingLabelInput"),
+  mappingLookupStatus: document.querySelector("#mappingLookupStatus"),
+  mappingSkipButton: document.querySelector("#mappingSkipButton"),
+  mappingOpenDetailButton: document.querySelector("#mappingOpenDetailButton"),
+  mappingProductList: document.querySelector("#mappingProductList"),
+  mappingPageText: document.querySelector("#mappingPageText"),
+  mappingLoadMoreButton: document.querySelector("#mappingLoadMoreButton"),
   sessionForm: document.querySelector("#sessionForm"),
   sessionId: document.querySelector("#sessionId"),
   sessionName: document.querySelector("#sessionName"),
@@ -390,6 +412,155 @@ async function loadProductIssues() {
     showToast(state.productIssues.length ? `Found ${state.productIssues.length} product issues` : "No product issues found");
   } catch (err) {
     showToast(err.message, 'error');
+  }
+}
+
+function selectedMappingProduct() {
+  return state.mappingProducts.find((product) => product.id === state.selectedMappingProductId) || null;
+}
+
+function renderMappingProducts() {
+  const active = selectedMappingProduct();
+  els.mappingCountText.textContent = `${state.mappingTotal} ${els.mappingOnlyMissing.checked ? "need barcode" : "products"}`;
+  els.mappingPageText.textContent = `Showing ${state.mappingProducts.length} of ${state.mappingTotal}`;
+  els.mappingLoadMoreButton.classList.toggle("hidden", state.mappingProducts.length >= state.mappingTotal);
+  if (!active) {
+    els.mappingActiveCard.innerHTML = `
+      <div class="mapping-empty">
+        <h3>No product selected</h3>
+        <p class="meta">Search or reload the queue, then choose a product before scanning its barcode.</p>
+      </div>
+    `;
+  } else {
+    const aliases = active.barcodes || [];
+    els.mappingActiveCard.innerHTML = `
+      <div class="mapping-active-head">
+        ${active.photo_url ? `<img class="row-thumb" src="${escapeHtml(active.photo_url)}" alt="">` : `<div class="row-thumb empty"></div>`}
+        <div>
+          <h3>${escapeHtml(active.name)}</h3>
+          <p class="meta-details">
+            <span><strong>BIN:</strong> ${escapeHtml(active.bin || active.procurewizard?.bin_number || "Missing")}</span>
+            <span><strong>PID:</strong> ${escapeHtml(active.procurewizard?.pid || "None")}</span>
+            <span><strong>Size:</strong> ${escapeHtml(active.size || active.procurewizard?.pack_size || "None")}</span>
+          </p>
+          <p class="meta-details">
+            <span>${escapeHtml(active.category || "No category")}</span>
+            <span>${escapeHtml(active.real_barcode_count || 0)} real barcodes</span>
+          </p>
+        </div>
+        ${active.needs_real_barcode ? statusBadge("needs barcode") : statusBadge("mapped")}
+      </div>
+      <div class="mapping-aliases">
+        ${aliases.map((alias) => `
+          <span class="alias-pill ${alias.label === "ProcureWizard PID" ? "muted" : ""}">
+            ${escapeHtml(alias.barcode)} · ${escapeHtml(alias.label || "Alias")}
+          </span>
+        `).join("") || `<span class="alias-pill muted">No aliases</span>`}
+      </div>
+    `;
+  }
+  els.mappingProductList.innerHTML = state.mappingProducts.length ? state.mappingProducts.map((product) => `
+    <article class="mapping-row ${product.id === state.selectedMappingProductId ? "selected" : ""}" data-product-id="${escapeHtml(product.id)}">
+      ${product.photo_url ? `<img class="row-thumb" src="${escapeHtml(product.photo_url)}" alt="">` : `<div class="row-thumb empty"></div>`}
+      <div>
+        <h3>${escapeHtml(product.name)}</h3>
+        <p class="meta-details">
+          <span><strong>BIN:</strong> ${escapeHtml(product.bin || product.procurewizard?.bin_number || "Missing")}</span>
+          <span><strong>PID:</strong> ${escapeHtml(product.procurewizard?.pid || "None")}</span>
+          <span><strong>Aliases:</strong> ${escapeHtml(product.barcode_count || 0)}</span>
+        </p>
+      </div>
+      ${product.needs_real_barcode ? statusBadge("needs barcode") : statusBadge("mapped")}
+      <button class="secondary" data-action="select-map-product" data-id="${escapeHtml(product.id)}" type="button">Select</button>
+    </article>
+  `).join("") : `<p class="meta" style="text-align:center; padding:24px;">No products match this mapping queue.</p>`;
+}
+
+async function loadMappingProducts(append = false) {
+  try {
+    if (!append) state.mappingOffset = 0;
+    const params = new URLSearchParams({
+      search: els.mappingSearch.value.trim(),
+      only_missing: els.mappingOnlyMissing.checked ? "true" : "false",
+      limit: String(state.mappingLimit),
+      offset: String(state.mappingOffset)
+    });
+    const data = await api(`/admin/api/barcode-mapping/products?${params}`);
+    state.mappingTotal = data.total || 0;
+    state.mappingProducts = append ? [...state.mappingProducts, ...(data.products || [])] : (data.products || []);
+    if (!state.mappingProducts.some((product) => product.id === state.selectedMappingProductId)) {
+      state.selectedMappingProductId = state.mappingProducts[0]?.id || null;
+    }
+    renderMappingProducts();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function selectNextMappingProduct() {
+  if (!state.mappingProducts.length) {
+    state.selectedMappingProductId = null;
+    renderMappingProducts();
+    return;
+  }
+  const currentIndex = state.mappingProducts.findIndex((product) => product.id === state.selectedMappingProductId);
+  const nextIndex = currentIndex >= 0 ? Math.min(currentIndex + 1, state.mappingProducts.length - 1) : 0;
+  state.selectedMappingProductId = state.mappingProducts[nextIndex]?.id || null;
+  renderMappingProducts();
+  els.mappingBarcodeInput.focus();
+}
+
+async function lookupMappingBarcode() {
+  const barcode = els.mappingBarcodeInput.value.trim();
+  if (!barcode) {
+    els.mappingLookupStatus.textContent = "";
+    els.mappingLookupStatus.classList.remove("error");
+    return;
+  }
+  try {
+    const data = await api(`/admin/api/barcode-mapping/barcodes/${encodeURIComponent(barcode)}`);
+    if (data.owner) {
+      els.mappingLookupStatus.textContent = `Already mapped to ${data.owner.name} (${data.owner.id})`;
+      els.mappingLookupStatus.classList.add("error");
+    } else {
+      els.mappingLookupStatus.textContent = "Ready to save as a barcode alias.";
+      els.mappingLookupStatus.classList.remove("error");
+    }
+  } catch (err) {
+    els.mappingLookupStatus.textContent = err.message;
+    els.mappingLookupStatus.classList.add("error");
+  }
+}
+
+async function saveMappedBarcode() {
+  const product = selectedMappingProduct();
+  const barcode = els.mappingBarcodeInput.value.trim();
+  if (!product) {
+    showToast("Select a product first.", "error");
+    return;
+  }
+  if (!barcode) {
+    els.mappingBarcodeInput.focus();
+    return;
+  }
+  try {
+    await api(`/admin/api/products/${encodeURIComponent(product.id)}/barcodes`, {
+      method: "POST",
+      body: JSON.stringify({
+        barcode,
+        label: els.mappingLabelInput.value.trim() || "Mapped barcode",
+        is_primary: false
+      })
+    });
+    showToast(`Mapped ${barcode} to ${product.name}`);
+    els.mappingBarcodeInput.value = "";
+    els.mappingLookupStatus.textContent = "";
+    await loadMappingProducts(false);
+    await loadDashboard();
+    await loadProducts(els.productSearch.value);
+    els.mappingBarcodeInput.focus();
+  } catch (err) {
+    showToast(err.message, "error");
   }
 }
 
@@ -783,6 +954,10 @@ function bindEvents() {
     button.addEventListener("click", () => {
       els.tabs.forEach((tab) => tab.classList.toggle("active", tab === button));
       els.views.forEach((view) => view.classList.toggle("hidden", view.id !== `${button.dataset.view}View`));
+      if (button.dataset.view === "mapping") {
+        loadMappingProducts();
+        setTimeout(() => els.mappingBarcodeInput.focus(), 80);
+      }
       if (button.dataset.view === "export") loadExportReview();
     });
   });
@@ -957,6 +1132,44 @@ function bindEvents() {
     if (!button || button.dataset.action !== "detail-product") return;
     await openProductDetail(button.dataset.id);
   });
+
+  els.mappingSearchForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await loadMappingProducts();
+    els.mappingBarcodeInput.focus();
+  });
+  els.mappingSearch.addEventListener("input", () => {
+    clearTimeout(state.mappingSearchTimer);
+    state.mappingSearchTimer = setTimeout(() => loadMappingProducts(), 250);
+  });
+  els.mappingOnlyMissing.addEventListener("change", () => loadMappingProducts());
+  els.mappingReloadButton.addEventListener("click", () => loadMappingProducts());
+  els.mappingLoadMoreButton.addEventListener("click", async () => {
+    state.mappingOffset += state.mappingLimit;
+    await loadMappingProducts(true);
+  });
+  els.mappingProductList.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    const row = event.target.closest(".mapping-row");
+    const productId = button?.dataset.id || row?.dataset.productId;
+    if (!productId) return;
+    state.selectedMappingProductId = productId;
+    renderMappingProducts();
+    els.mappingBarcodeInput.focus();
+  });
+  els.mappingBarcodeForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveMappedBarcode();
+  });
+  els.mappingBarcodeInput.addEventListener("input", () => {
+    clearTimeout(state.mappingLookupTimer);
+    state.mappingLookupTimer = setTimeout(lookupMappingBarcode, 220);
+  });
+  els.mappingSkipButton.addEventListener("click", selectNextMappingProduct);
+  els.mappingOpenDetailButton.addEventListener("click", async () => {
+    const product = selectedMappingProduct();
+    if (product) await openProductDetail(product.id);
+  });
   
   // Custom dialog events
   els.cancelProductDialogButton.addEventListener("click", () => {
@@ -1126,7 +1339,7 @@ function bindEvents() {
 
 async function hydrate() {
   await loadDashboard();
-  await Promise.all([loadTasks(), loadProducts(), loadSessions()]);
+  await Promise.all([loadTasks(), loadProducts(), loadSessions(), loadMappingProducts()]);
   if (els.exportSession.value) await loadExportReview();
   await loadProcureWizardStatus();
 }

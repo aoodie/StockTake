@@ -141,6 +141,9 @@ def decorate_product(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]
         "SELECT barcode, label, is_primary FROM product_barcodes WHERE product_id = ? ORDER BY is_primary DESC, barcode",
         (product["id"],),
     ).fetchall()
+    real_barcode_count = sum(
+        1 for alias in aliases if (alias["label"] or "") != "ProcureWizard PID"
+    )
     issue_names = []
     if not (product.get("bin") or "").strip():
         issue_names.append("missing_bin")
@@ -148,11 +151,30 @@ def decorate_product(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]
         issue_names.append("draft_product")
     if not (product.get("unit") or "").strip():
         issue_names.append("missing_unit")
-    if not aliases:
+    if not real_barcode_count:
         issue_names.append("missing_barcode")
     product["barcode_count"] = len(aliases)
+    product["real_barcode_count"] = real_barcode_count
     product["barcodes"] = [dict(alias) for alias in aliases]
     product["issues"] = issue_names
+    return product
+
+def mapping_product(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+    product = decorate_product(db, row)
+    procurewizard = db.execute(
+        """
+        SELECT pwr.id AS row_id, pwr.pid, pwr.bin_number, pwr.pos, pwr.pack_size,
+               pwr.match_status, pwi.filename
+        FROM procurewizard_rows pwr
+        JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
+        WHERE pwr.product_id = ?
+        ORDER BY pwr.row_index
+        LIMIT 1
+        """,
+        (product["id"],),
+    ).fetchone()
+    product["procurewizard"] = dict(procurewizard) if procurewizard else None
+    product["needs_real_barcode"] = product["real_barcode_count"] == 0
     return product
 
 @router.post("/admin/api/login")
@@ -256,6 +278,107 @@ def admin_products(
             ).fetchall()
         products = [decorate_product(db, row) for row in rows]
     return {"products": products, "total": total}
+
+@router.get("/admin/api/barcode-mapping/products")
+def admin_barcode_mapping_products(
+    search: str = "",
+    only_missing: bool = True,
+    limit: int = 50,
+    offset: int = 0,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    where = []
+    params: list[Any] = []
+    if search:
+        query = f"%{search.lower()}%"
+        where.append(
+            """
+            (
+                lower(p.name || ' ' || COALESCE(p.barcode, '') || ' ' || COALESCE(p.bin, '') || ' ' ||
+                      COALESCE(p.category, '') || ' ' || COALESCE(p.size, '')) LIKE ?
+                OR p.id IN (
+                    SELECT product_id
+                    FROM product_barcodes
+                    WHERE lower(barcode || ' ' || COALESCE(label, '')) LIKE ?
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM procurewizard_rows pwr
+                    JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
+                    WHERE pwr.product_id = p.id
+                      AND lower(pwr.pid || ' ' || COALESCE(pwr.bin_number, '') || ' ' ||
+                                pwr.description || ' ' || COALESCE(pwr.category, '') || ' ' ||
+                                COALESCE(pwr.pack_size, '')) LIKE ?
+                )
+            )
+            """
+        )
+        params.extend([query, query, query])
+    if only_missing:
+        where.append(
+            """
+            (
+                SELECT COUNT(*)
+                FROM product_barcodes pb
+                WHERE pb.product_id = p.id
+                  AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            ) = 0
+            """
+        )
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    select_sql = """
+        SELECT p.id, p.barcode, p.bin, p.name, p.category, p.size, p.unit, p.photo_url, p.notes,
+               p.draft_status, p.product_updated_at, p.photo_source_url, p.photo_source_name,
+               p.photo_saved_path, p.photo_approved_at
+        FROM products p
+    """
+    with get_db() as db:
+        count_row = db.execute(f"SELECT COUNT(*) AS c FROM products p {where_sql}", params).fetchone()
+        rows = db.execute(
+            f"""
+            {select_sql}
+            {where_sql}
+            ORDER BY
+                (
+                    SELECT COUNT(*)
+                    FROM product_barcodes pb
+                    WHERE pb.product_id = p.id
+                      AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+                ) ASC,
+                CASE WHEN p.id LIKE 'procurewizard-%' THEN 0 ELSE 1 END,
+                lower(COALESCE(p.bin, '')),
+                lower(p.name)
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+        products = [mapping_product(db, row) for row in rows]
+    return {"products": products, "total": count_row["c"] if count_row else 0}
+
+@router.get("/admin/api/barcode-mapping/barcodes/{barcode}")
+def admin_barcode_mapping_lookup(
+    barcode: str,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    code = normalize_identifier(barcode)
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT p.id, p.name, p.barcode, pb.label
+            FROM product_barcodes pb
+            JOIN products p ON p.id = pb.product_id
+            WHERE pb.barcode = ?
+            LIMIT 1
+            """,
+            (code,),
+        ).fetchone()
+    return {"barcode": code, "owner": dict(row) if row else None}
 
 @router.get("/admin/api/products/issues")
 def admin_product_issues(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:

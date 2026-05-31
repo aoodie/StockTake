@@ -327,6 +327,55 @@ def test_product_alias_issue_detail_and_merge_workflow(tmp_path, monkeypatch):
     assert client.get("/admin/api/products/product-222").status_code == 404
 
 
+def test_barcode_mapping_queue_tracks_real_aliases(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    csv_text = "\n".join(
+        [
+            "21041,928291,<-- Do not delete or edit,,,,,,,",
+            "PID,[E]Bin number,[E]Pos,Tertiary Category,Brand & Description,Pack Size,Est FC,Est SC,[E]Close FC,[E]Close SC",
+            "3862551,3862551,,Whiskey,Jack Daniels Rye,1 x 70 cl [1],0,0,,",
+        ]
+    )
+    imported = client.post(
+        "/admin/api/procurewizard/import",
+        json={"filename": "pw.csv", "csv_text": csv_text},
+    )
+    assert imported.status_code == 200
+
+    queue = client.get("/admin/api/barcode-mapping/products?only_missing=true")
+    assert queue.status_code == 200
+    body = queue.json()
+    assert body["total"] == 1
+    product = body["products"][0]
+    assert product["id"] == "procurewizard-3862551"
+    assert product["procurewizard"]["pid"] == "3862551"
+    assert product["needs_real_barcode"] is True
+
+    mapped = client.post(
+        "/admin/api/products/procurewizard-3862551/barcodes",
+        json={"barcode": "5010327001234", "label": "Bottle barcode"},
+    )
+    assert mapped.status_code == 200
+
+    lookup = client.get("/admin/api/barcode-mapping/barcodes/5010327001234")
+    assert lookup.status_code == 200
+    assert lookup.json()["owner"]["id"] == "procurewizard-3862551"
+
+    missing = client.get("/admin/api/barcode-mapping/products?only_missing=true")
+    assert missing.status_code == 200
+    assert missing.json()["total"] == 0
+
+    all_products = client.get("/admin/api/barcode-mapping/products?only_missing=false")
+    assert all_products.status_code == 200
+    assert all_products.json()["products"][0]["real_barcode_count"] == 1
+
+
 def test_product_patch_rejects_barcode_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
