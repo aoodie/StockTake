@@ -6,6 +6,7 @@ const state = {
   productIssues: [],
   selectedTask: null,
   selectedProductDetail: null,
+  procurewizard: null,
   lookupTimer: null,
   // Pagination & Selection State
   productsLimit: 50,
@@ -37,6 +38,11 @@ const els = {
   sessionList: document.querySelector("#sessionList"),
   exportSession: document.querySelector("#exportSession"),
   exportReview: document.querySelector("#exportReview"),
+  pwCsvFile: document.querySelector("#pwCsvFile"),
+  pwImportButton: document.querySelector("#pwImportButton"),
+  pwDownloadLink: document.querySelector("#pwDownloadLink"),
+  pwStatus: document.querySelector("#pwStatus"),
+  pwRows: document.querySelector("#pwRows"),
   
   // Barcode review dialog
   taskDialog: document.querySelector("#taskDialog"),
@@ -102,7 +108,12 @@ const els = {
   addAliasButton: document.querySelector("#addAliasButton"),
   mergeSourceProductId: document.querySelector("#mergeSourceProductId"),
   mergeTargetProductId: document.querySelector("#mergeTargetProductId"),
-  mergeProductButton: document.querySelector("#mergeProductButton")
+  mergeProductButton: document.querySelector("#mergeProductButton"),
+  confirmDialog: document.querySelector("#confirmDialog"),
+  confirmTitle: document.querySelector("#confirmTitle"),
+  confirmMessage: document.querySelector("#confirmMessage"),
+  confirmOkButton: document.querySelector("#confirmOkButton"),
+  confirmCancelButton: document.querySelector("#confirmCancelButton")
 };
 
 function escapeHtml(value) {
@@ -123,6 +134,29 @@ function showToast(message, type = 'success') {
   setTimeout(() => {
     toast.remove();
   }, 5000);
+}
+
+function confirmDialog(title, message, okLabel = "Confirm") {
+  els.confirmTitle.textContent = title;
+  els.confirmMessage.textContent = message;
+  els.confirmOkButton.textContent = okLabel;
+  return new Promise((resolve) => {
+    const closeWith = (value) => {
+      els.confirmDialog.close(value ? "ok" : "cancel");
+    };
+    const onClose = () => {
+      els.confirmOkButton.removeEventListener("click", onOk);
+      els.confirmCancelButton.removeEventListener("click", onCancel);
+      els.confirmDialog.removeEventListener("close", onClose);
+      resolve(els.confirmDialog.returnValue === "ok");
+    };
+    const onOk = () => closeWith(true);
+    const onCancel = () => closeWith(false);
+    els.confirmOkButton.addEventListener("click", onOk);
+    els.confirmCancelButton.addEventListener("click", onCancel);
+    els.confirmDialog.addEventListener("close", onClose);
+    els.confirmDialog.showModal();
+  });
 }
 
 async function api(path, options = {}) {
@@ -463,6 +497,84 @@ async function loadExportReview(sessionId = els.exportSession.value) {
   } catch (err) {
     showToast(err.message, 'error');
   }
+  await loadProcureWizardStatus(sessionId);
+}
+
+async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
+  if (!els.pwStatus) return;
+  try {
+    const data = await api("/admin/api/procurewizard/status");
+    state.procurewizard = data;
+    const active = data.active;
+    if (!active) {
+      els.pwStatus.innerHTML = `<p class="meta">No ProcureWizard CSV imported yet.</p>`;
+      els.pwRows.innerHTML = "";
+      els.pwDownloadLink.classList.add("disabled");
+      els.pwDownloadLink.href = "#";
+      return;
+    }
+    const counts = data.counts || {};
+    els.pwStatus.innerHTML = `
+      <p><strong>Active file:</strong> ${escapeHtml(active.filename)} · ${escapeHtml(active.row_count)} rows</p>
+      <p class="meta-details">
+        <span>Matched: ${escapeHtml(counts.matched || 0)}</span>
+        <span>Imported: ${escapeHtml(counts.imported || 0)}</span>
+        <span>Manual: ${escapeHtml(counts.manual || 0)}</span>
+        <span>Unmatched: ${escapeHtml(counts.unmatched || 0)}</span>
+      </p>
+    `;
+    if (sessionId) {
+      els.pwDownloadLink.href = `/admin/api/procurewizard/export/${encodeURIComponent(sessionId)}`;
+      els.pwDownloadLink.classList.remove("disabled");
+    }
+    els.pwRows.innerHTML = (data.rows || []).slice(0, 30).map((row) => `
+      <article class="task-row pw-row">
+        <div>
+          <h3>${escapeHtml(row.description)}</h3>
+          <p class="meta-details">
+            <span><strong>PID:</strong> ${escapeHtml(row.pid)}</span>
+            <span><strong>BIN:</strong> ${escapeHtml(row.bin_number || "None")}</span>
+            <span><strong>Pack:</strong> ${escapeHtml(row.pack_size || "None")}</span>
+            <span><strong>Category:</strong> ${escapeHtml(row.category || "None")}</span>
+          </p>
+          <p class="meta-details">
+            <span><strong>Linked:</strong> ${escapeHtml(row.product_name || row.product_id || "None")}</span>
+            <span><strong>Reason:</strong> ${escapeHtml(row.match_reason || "-")}</span>
+          </p>
+        </div>
+        ${statusBadge(row.match_status)}
+        <div class="pw-link-controls">
+          <input value="${escapeHtml(row.product_id || "")}" data-pw-row-id="${escapeHtml(row.id)}" placeholder="product id">
+          <button class="secondary" data-action="link-pw-row" data-id="${escapeHtml(row.id)}" type="button">Link</button>
+        </div>
+      </article>
+    `).join("");
+  } catch (err) {
+    els.pwStatus.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function importProcureWizardCsv() {
+  const file = els.pwCsvFile.files?.[0];
+  if (!file) {
+    showToast("Choose a ProcureWizard CSV first.", "error");
+    return;
+  }
+  els.pwImportButton.disabled = true;
+  try {
+    const buffer = await file.arrayBuffer();
+    const csv_text = new TextDecoder("windows-1252").decode(buffer);
+    const result = await api("/admin/api/procurewizard/import", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, csv_text })
+    });
+    showToast(`Imported ${result.row_count} ProcureWizard rows`);
+    await hydrate();
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    els.pwImportButton.disabled = false;
+  }
 }
 
 function showTask(task) {
@@ -627,7 +739,7 @@ async function mergeSelectedProduct() {
     showToast("Enter the duplicate product ID to merge from", "error");
     return;
   }
-  if (!confirm(`Merge ${sourceId} into ${product.id}? Counts and barcode aliases will move to the current product.`)) return;
+  if (!(await confirmDialog("Merge products", `Merge ${sourceId} into ${product.id}? Counts and barcode aliases will move to the current product.`, "Merge"))) return;
   try {
     await api("/admin/api/products/merge", {
       method: "POST",
@@ -741,7 +853,7 @@ function bindEvents() {
   
   els.rejectTaskButton.addEventListener("click", async () => {
     if (!state.selectedTask) return;
-    if (!confirm("Are you sure you want to reject and delete this task and its draft product?")) return;
+    if (!(await confirmDialog("Reject task", "Reject and delete this task and its draft product?", "Reject & Delete"))) return;
     try {
       await api(`/admin/api/tasks/${encodeURIComponent(state.selectedTask.id)}/reject`, {
         method: "POST"
@@ -826,7 +938,7 @@ function bindEvents() {
     }
     
     if (button.dataset.action === "delete-product") {
-      if (!confirm("Are you sure you want to delete this product?")) return;
+      if (!(await confirmDialog("Delete product", "Delete this product from the catalog?", "Delete"))) return;
       try {
         await api(`/admin/api/products/${encodeURIComponent(id)}`, {
           method: "DELETE"
@@ -912,7 +1024,7 @@ function bindEvents() {
   });
   
   els.bulkDeleteButton.addEventListener("click", async () => {
-    if (!confirm(`Are you sure you want to delete ${state.selectedProductIds.length} selected products?`)) return;
+    if (!(await confirmDialog("Bulk delete products", `Delete ${state.selectedProductIds.length} selected products?`, "Delete"))) return;
     try {
       await api("/admin/api/products/bulk-delete", {
         method: "POST",
@@ -960,7 +1072,7 @@ function bindEvents() {
     }
     
     if (button.dataset.action === "delete-session") {
-      if (!confirm("Are you sure you want to delete this session and all its stocktake line counts? This cannot be undone!")) return;
+      if (!(await confirmDialog("Delete session", "Delete this session and all its stocktake line counts? This cannot be undone.", "Delete"))) return;
       try {
         await api(`/admin/api/sessions/${encodeURIComponent(id)}`, {
           method: "DELETE"
@@ -975,6 +1087,23 @@ function bindEvents() {
   });
 
   els.exportSession.addEventListener("change", () => loadExportReview());
+  els.pwImportButton.addEventListener("click", importProcureWizardCsv);
+  els.pwRows.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    if (!button || button.dataset.action !== "link-pw-row") return;
+    const row = button.closest(".pw-row");
+    const input = row.querySelector("[data-pw-row-id]");
+    try {
+      await api(`/admin/api/procurewizard/rows/${encodeURIComponent(button.dataset.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ product_id: input.value.trim() || null })
+      });
+      showToast("ProcureWizard row link updated");
+      await loadProcureWizardStatus();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
   els.exportReview.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
     if (!button || button.dataset.action !== "save-bin") return;
@@ -999,6 +1128,7 @@ async function hydrate() {
   await loadDashboard();
   await Promise.all([loadTasks(), loadProducts(), loadSessions()]);
   if (els.exportSession.value) await loadExportReview();
+  await loadProcureWizardStatus();
 }
 
 async function init() {

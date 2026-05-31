@@ -134,10 +134,23 @@
           <div class="section-head">
             <div>
               <h2>Export Review</h2>
-              <p class="section-desc">Validate BINs and draft details before Excel export</p>
+              <p class="section-desc">Validate stocktake counts and round-trip ProcureWizard CSV files</p>
             </div>
             <select id="exportSession"></select>
           </div>
+          <section class="pw-panel">
+            <div>
+              <h3>ProcureWizard CSV</h3>
+              <p class="section-desc">Upload the stocktake template, link products, then export the same CSV format.</p>
+            </div>
+            <div class="pw-import-row">
+              <input id="pwCsvFile" type="file" accept=".csv,text/csv">
+              <button id="pwImportButton" class="secondary" type="button">Import CSV</button>
+              <a id="pwDownloadLink" class="download-link disabled" href="#">Download ProcureWizard CSV</a>
+            </div>
+            <div id="pwStatus" class="source-list"></div>
+            <div id="pwRows" class="task-list"></div>
+          </section>
           <div id="exportReview" class="export-review"></div>
         </section>
       </section>
@@ -224,6 +237,23 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=product-enrich-1" type="module"></script>
+    <!-- Dialog: Confirm Admin Action -->
+    <dialog id="confirmDialog">
+      <form method="dialog" class="dialog-shell confirm-shell">
+        <header>
+          <h2 id="confirmTitle">Confirm Action</h2>
+          <button value="cancel" class="close-dialog-btn" type="button">×</button>
+        </header>
+        <div class="dialog-content">
+          <p id="confirmMessage" class="confirm-message"></p>
+        </div>
+        <footer>
+          <button id="confirmCancelButton" value="cancel" type="button" class="secondary">Cancel</button>
+          <button id="confirmOkButton" value="ok" class="warning" type="button">Confirm</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/admin.js?v=pw-flow-1" type="module"></script>
   </body>
 </html>

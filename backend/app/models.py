@@ -87,3 +87,10 @@ class ProductBarcodeRequest(BaseModel):
 class ProductMergeRequest(BaseModel):
     source_product_id: str = Field(min_length=1)
     target_product_id: str = Field(min_length=1)
+
+class ProcureWizardImportRequest(BaseModel):
+    filename: str = "procurewizard.csv"
+    csv_text: str = Field(min_length=1)
+
+class ProcureWizardLinkRequest(BaseModel):
+    product_id: str | None = None

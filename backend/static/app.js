@@ -4,6 +4,7 @@ import {
   BARCODE_FORMATS,
   CAMERA_DETECT_INTERVAL_MS,
   SCAN_DEBOUNCE_MS,
+  ZXING_DETECT_INTERVAL_MS,
   ZXING_FAST_FORMATS,
   addDecimalStrings,
   barcodeLookupKeys,
@@ -11,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=diag1";
+} from "./frontend-utils.js?v=pw-fast-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -28,6 +29,7 @@ const els = {
   torchButton: document.querySelector("#torchButton"),
   wakeButton: document.querySelector("#wakeButton"),
   pulse: document.querySelector("#pulse"),
+  scanHud: document.querySelector("#scanHud"),
   modeRow: document.querySelector("#modeRow"),
   multiMode: document.querySelector("#multiMode"),
   bulkMode: document.querySelector("#bulkMode"),
@@ -67,6 +69,16 @@ const els = {
   duplicateNew: document.querySelector("#duplicateNew"),
   duplicateAddButton: document.querySelector("#duplicateAddButton"),
   duplicateEditButton: document.querySelector("#duplicateEditButton"),
+  unknownDialog: document.querySelector("#unknownDialog"),
+  unknownBarcodeText: document.querySelector("#unknownBarcodeText"),
+  unknownNameInput: document.querySelector("#unknownNameInput"),
+  unknownBinInput: document.querySelector("#unknownBinInput"),
+  saveUnknownButton: document.querySelector("#saveUnknownButton"),
+  confirmDialog: document.querySelector("#confirmDialog"),
+  confirmTitle: document.querySelector("#confirmTitle"),
+  confirmMessage: document.querySelector("#confirmMessage"),
+  confirmOkButton: document.querySelector("#confirmOkButton"),
+  confirmCancelButton: document.querySelector("#confirmCancelButton"),
   diagnosticsButton: document.querySelector("#diagnosticsButton"),
   diagnosticsDialog: document.querySelector("#diagnosticsDialog"),
   diagnosticsList: document.querySelector("#diagnosticsList"),
@@ -96,7 +108,11 @@ let diagnostics = {
   last_accepted_barcode: "-",
   last_rejected_reason: "-",
   last_scan_time: "-",
-  last_error: "-"
+  last_error: "-",
+  roi_size: "-",
+  decode_ms_avg: "-",
+  decode_errors: "0",
+  frames_skipped: "0"
 };
 
 const DIAGNOSTIC_LABELS = {
@@ -116,7 +132,11 @@ const DIAGNOSTIC_LABELS = {
   last_accepted_barcode: "Last Accepted",
   last_rejected_reason: "Last Rejected",
   last_scan_time: "Last Scan Time",
-  last_error: "Last Error"
+  last_error: "Last Error",
+  roi_size: "ROI Size",
+  decode_ms_avg: "Decode Avg",
+  decode_errors: "Decode Errors",
+  frames_skipped: "Frames Skipped"
 };
 
 let state = {
@@ -140,6 +160,15 @@ let state = {
   detector: null,
   zxingReader: null,
   zxingControls: null,
+  zxingCanvas: null,
+  zxingImage: null,
+  decodeInFlight: false,
+  decodeErrors: 0,
+  framesSkipped: 0,
+  decodeSamples: [],
+  activeDecoder: "none",
+  pendingUnknownProduct: null,
+  hudTimer: null,
   stream: null,
   scanLoopActive: false,
   inactivityTimer: null,
@@ -245,6 +274,10 @@ async function saveState() {
     detector: undefined,
     zxingReader: undefined,
     zxingControls: undefined,
+    zxingCanvas: undefined,
+    zxingImage: undefined,
+    decodeInFlight: undefined,
+    hudTimer: undefined,
     scanInFlight: undefined,
     inactivityTimer: undefined
   });
@@ -300,6 +333,8 @@ function normalProduct(product) {
     unit: product.unit || "each",
     photo_url: product.photo_url || "",
     notes: product.notes || "",
+    barcodes: Array.isArray(product.barcodes) ? product.barcodes : [],
+    procurewizard: product.procurewizard || null,
     draft_status: product.draft_status || "confirmed",
     product_updated_at: product.product_updated_at || new Date().toISOString()
   };
@@ -313,6 +348,12 @@ async function cacheProduct(product) {
 function indexProduct(product) {
   const keys = barcodeLookupKeys(product.barcode);
   if (product.barcode_raw) keys.push(...barcodeLookupKeys(product.barcode_raw));
+  for (const alias of product.barcodes || []) {
+    keys.push(...barcodeLookupKeys(alias.barcode));
+  }
+  if (product.procurewizard?.pid) {
+    keys.push(...barcodeLookupKeys(product.procurewizard.pid));
+  }
   for (const key of new Set(keys)) {
     productIndex.set(key, product);
   }
@@ -453,6 +494,52 @@ async function getProduct(barcode) {
   return draft;
 }
 
+function productSubtitle(product) {
+  const parts = [
+    product.procurewizard ? "PW linked" : "",
+    product.bin ? `BIN ${product.bin}` : "No BIN",
+    product.category || "",
+    product.size || ""
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
+function showScanHud(product, quantity, total, variant = "success") {
+  clearTimeout(state.hudTimer);
+  const isDraft = product?.draft_status === "draft";
+  const photo = product?.photo_url
+    ? `<img alt="" src="${escapeHtml(product.photo_url)}">`
+    : `<span class="hud-photo"></span>`;
+  els.scanHud.className = `scan-hud ${isDraft ? "draft" : ""} ${variant === "error" ? "error" : ""}`;
+  els.scanHud.innerHTML = `
+    ${photo}
+    <span>
+      <strong>${escapeHtml(product?.name || "Scan failed")}</strong>
+      <small>${escapeHtml(product ? productSubtitle(product) : "Try again")}</small>
+      <small>${escapeHtml(product?.barcode || "")}</small>
+    </span>
+    <span class="hud-qty">+${escapeHtml(quantity)} / ${escapeHtml(total)}</span>
+    ${isDraft ? `<button data-action="describe-unknown" type="button">Describe</button>` : ""}
+  `;
+  els.scanHud.classList.remove("hidden");
+  state.hudTimer = setTimeout(() => {
+    els.scanHud.classList.add("hidden");
+  }, isDraft ? 3200 : 1200);
+}
+
+async function commitScanQuantity(product, quantity, { mergeDuplicate = false, reason = "Scan saved" } = {}) {
+  if (mergeDuplicate) {
+    const existingLine = await findExistingLineForProduct(product);
+    if (existingLine) {
+      const newQuantity = addDecimalStrings(existingLine.quantity_decimal, quantity);
+      await editLine(existingLine, newQuantity, reason);
+      return newQuantity;
+    }
+  }
+  await addLine(product, quantity);
+  return currentCount(product.barcode);
+}
+
 async function handleScan(barcode, options = {}) {
   barcode = normalizeBarcode(barcode);
   updateDiagnostics({ last_raw_barcode: barcode || "-", decoder_heartbeat: new Date().toLocaleTimeString() });
@@ -468,7 +555,7 @@ async function handleScan(barcode, options = {}) {
     rejectScan("scan already processing");
     return;
   }
-  if (state.pendingBarcode && !options.replacePending) {
+  if (state.mode !== "multi" && state.pendingBarcode && !options.replacePending) {
     rejectScan(`waiting for quantity: ${state.pendingBarcode}`);
     return;
   }
@@ -484,7 +571,7 @@ async function handleScan(barcode, options = {}) {
   }
   state.lastBarcode = barcode;
   state.lastScanAt = now;
-  state.pendingBarcode = barcode;
+  state.pendingBarcode = state.mode === "multi" ? "" : barcode;
   state.scanInFlight = true;
   updateDiagnostics({
     last_accepted_barcode: barcode,
@@ -498,8 +585,16 @@ async function handleScan(barcode, options = {}) {
     state.quantity = "";
     renderProduct(product);
     renderQuantity();
-    focusQuantity();
-    pulse("Scanned\nEnter quantity");
+    if (state.mode === "multi") {
+      const total = await commitScanQuantity(product, "1", { mergeDuplicate: false });
+      showScanHud(product, "1", total);
+      pulse(`Saved\n${total}`);
+      if (product.draft_status === "draft") state.pendingUnknownProduct = product;
+      resetActiveScan({ keepProduct: true });
+    } else {
+      focusQuantity();
+      pulse("Scanned\nEnter quantity");
+    }
     flashFeedback(product.draft_status === "draft" ? "error" : "success");
     vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
     await saveState();
@@ -507,6 +602,7 @@ async function handleScan(barcode, options = {}) {
     state.pendingBarcode = "";
     updateDiagnostics({ last_error: "product lookup failed" });
     setSyncStatus("Scan failed");
+    showScanHud(null, "0", "0", "error");
     flashFeedback("error");
     vibrate([80, 50, 120]);
   } finally {
@@ -689,7 +785,8 @@ async function confirmQuantity() {
     vibrate([80, 50, 120]);
     return;
   }
-  const existingLine = await findExistingLineForProduct(state.currentProduct);
+  const product = state.currentProduct;
+  const existingLine = await findExistingLineForProduct(product);
   if (existingLine) {
     const duplicateAction = await showDuplicateDialog(existingLine, quantity);
     if (duplicateAction === "cancel") {
@@ -704,21 +801,22 @@ async function confirmQuantity() {
     const newQuantity = addDecimalStrings(existingLine.quantity_decimal, quantity);
     await editLine(existingLine, newQuantity, "Duplicate scan added to existing line");
   } else {
-    await addLine(state.currentProduct, quantity);
+    await addLine(product, quantity);
   }
-  const count = await currentCount(state.currentProduct.barcode);
+  const count = await currentCount(product.barcode);
+  showScanHud(product, quantity, count);
   pulse(`Saved\nCurrent count: ${count}`);
   flashFeedback("success");
   resetActiveScan();
 }
 
-function resetActiveScan() {
+function resetActiveScan(options = {}) {
   state.quantity = "";
   state.pendingBarcode = "";
   state.scanInFlight = false;
-  state.currentProduct = null;
+  if (!options.keepProduct) state.currentProduct = null;
   renderQuantity();
-  clearProductCard();
+  if (!options.keepProduct) clearProductCard();
   els.quantityInput.classList.remove("pending", "error");
   els.manualBarcode.value = "";
 }
@@ -757,7 +855,7 @@ async function editLine(line, newQuantity, reason = "") {
 
 async function deleteLine(line) {
   if (!line) return;
-  const confirmed = window.confirm(`Delete scanned line for ${line.product_name} (${line.quantity_decimal})?`);
+  const confirmed = await confirmDialog("Delete scanned line", `Delete ${line.product_name} (${line.quantity_decimal})?`, "Delete");
   if (!confirmed) return;
   await del("lines", line.id);
   await enqueue("delete_line", {
@@ -819,6 +917,57 @@ function openLineEditor(line) {
   els.editDialog.showModal();
 }
 
+async function openUnknownDescription(product = state.pendingUnknownProduct || state.currentProduct) {
+  if (!product || product.draft_status !== "draft") return;
+  state.pendingUnknownProduct = product;
+  els.unknownBarcodeText.textContent = `Barcode ${product.barcode}`;
+  els.unknownNameInput.value = product.name?.startsWith("Draft ") ? "" : product.name;
+  els.unknownBinInput.value = product.bin || "";
+  els.unknownDialog.showModal();
+  els.unknownNameInput.focus();
+}
+
+async function saveUnknownDescription() {
+  const product = state.pendingUnknownProduct;
+  if (!product) return;
+  const description = els.unknownNameInput.value.trim();
+  const bin = els.unknownBinInput.value.trim();
+  if (!description) {
+    els.unknownNameInput.focus();
+    return;
+  }
+  const updated = {
+    ...product,
+    name: description,
+    bin,
+    notes: [product.notes, "Staff description captured on scan"].filter(Boolean).join("\n")
+  };
+  await cacheProduct(updated);
+  const lines = await scopedLines();
+  for (const line of lines.filter((item) => item.product_id === product.id)) {
+    await put("lines", {
+      ...line,
+      product_name: description,
+      bin,
+      missing_bin: !bin,
+      notes: updated.notes
+    });
+  }
+  await enqueue("draft_product", {
+    product_id: updated.id,
+    barcode: updated.barcode,
+    bin: updated.bin,
+    placeholder_name: updated.name,
+    notes: updated.notes
+  });
+  state.pendingUnknownProduct = updated;
+  renderProduct(updated);
+  await renderLines();
+  syncEvents();
+  els.unknownDialog.close();
+  pulse("Description saved");
+}
+
 function showDuplicateDialog(existingLine, newQuantity) {
   els.duplicateProduct.textContent = `${existingLine.product_name} is already counted in ${state.locationName}.`;
   els.duplicateExisting.textContent = existingLine.quantity_decimal;
@@ -859,6 +1008,34 @@ function pulse(message) {
   els.pulse.classList.remove("hidden");
   clearTimeout(pulse.timer);
   pulse.timer = setTimeout(() => els.pulse.classList.add("hidden"), 1300);
+}
+
+function confirmDialog(title, message, okLabel = "Confirm") {
+  return new Promise((resolve) => {
+    els.confirmTitle.textContent = title;
+    els.confirmMessage.textContent = message;
+    els.confirmOkButton.textContent = okLabel;
+    const cleanup = () => {
+      els.confirmOkButton.removeEventListener("click", onOk);
+      els.confirmCancelButton.removeEventListener("click", onCancel);
+      els.confirmDialog.removeEventListener("close", onClose);
+    };
+    const finish = (value) => {
+      cleanup();
+      els.confirmDialog.close(value ? "ok" : "cancel");
+      resolve(value);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onClose = () => {
+      cleanup();
+      resolve(els.confirmDialog.returnValue === "ok");
+    };
+    els.confirmOkButton.addEventListener("click", onOk);
+    els.confirmCancelButton.addEventListener("click", onCancel);
+    els.confirmDialog.addEventListener("close", onClose);
+    els.confirmDialog.showModal();
+  });
 }
 
 function flashFeedback(kind) {
@@ -952,10 +1129,11 @@ async function startCamera() {
 async function startScanLoop() {
   state.scanLoopActive = true;
   const nativeStarted = await startNativeScanLoop();
-  const zxingStarted = await startZxingScanLoop();
+  const zxingStarted = nativeStarted ? false : await startZxingScanLoop();
 
   if (nativeStarted || zxingStarted) {
-    const decoders = [nativeStarted ? "Native" : "", zxingStarted ? "ZXing" : ""].filter(Boolean).join(" + ");
+    const decoders = nativeStarted ? "Native" : "ZXing ROI";
+    state.activeDecoder = decoders;
     updateDiagnostics({ decoder_mode: decoders });
     setSyncStatus(`Fast scan: ${decoders}`);
     setAutoScan(true);
@@ -976,15 +1154,101 @@ async function startZxingScanLoop() {
     if (window.ZXing.DecodeHintType?.POSSIBLE_FORMATS) {
       hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
     }
-    state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, CAMERA_DETECT_INTERVAL_MS);
-    state.zxingControls = await state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
-      const barcode = decodedBarcodeText(result);
-      if (barcode) updateDiagnostics({ last_raw_barcode: barcode, decoder_heartbeat: new Date().toLocaleTimeString() });
-      if (barcode && !state.sleeping) handleScan(barcode);
-    });
+    state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, ZXING_DETECT_INTERVAL_MS);
+    state.zxingCanvas = state.zxingCanvas || document.createElement("canvas");
+    state.zxingImage = state.zxingImage || new Image();
+    runZxingRoiLoop();
     return true;
   }
   return false;
+}
+
+function recordDecodeDuration(startedAt) {
+  const elapsed = Math.max(0, Math.round(performance.now() - startedAt));
+  state.decodeSamples.push(elapsed);
+  state.decodeSamples = state.decodeSamples.slice(-20);
+  const avg = Math.round(state.decodeSamples.reduce((sum, item) => sum + item, 0) / state.decodeSamples.length);
+  updateDiagnostics({ decode_ms_avg: `${avg}ms` });
+}
+
+function shouldSkipDecode() {
+  if (state.sleeping || state.scanInFlight || document.hidden || els.preview.readyState < 2) return true;
+  return state.mode !== "multi" && Boolean(state.pendingBarcode);
+}
+
+function drawVideoRoi(fullFrame = false) {
+  const sourceWidth = els.preview.videoWidth;
+  const sourceHeight = els.preview.videoHeight;
+  if (!sourceWidth || !sourceHeight) return null;
+  const roiWidth = fullFrame ? sourceWidth : Math.floor(sourceWidth * 0.76);
+  const roiHeight = fullFrame ? sourceHeight : Math.floor(sourceHeight * 0.42);
+  const sx = Math.floor((sourceWidth - roiWidth) / 2);
+  const sy = Math.floor((sourceHeight - roiHeight) / 2);
+  const targetWidth = fullFrame ? 800 : 720;
+  const targetHeight = Math.max(220, Math.round(targetWidth * (roiHeight / roiWidth)));
+  const canvas = state.zxingCanvas;
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  canvas.getContext("2d", { willReadFrequently: true }).drawImage(
+    els.preview,
+    sx,
+    sy,
+    roiWidth,
+    roiHeight,
+    0,
+    0,
+    targetWidth,
+    targetHeight
+  );
+  updateDiagnostics({ roi_size: `${targetWidth}x${targetHeight}${fullFrame ? " full" : ""}` });
+  return canvas;
+}
+
+function imageLoaded(image) {
+  return new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = reject;
+  });
+}
+
+async function decodeZxingRoi(fullFrame = false) {
+  const canvas = drawVideoRoi(fullFrame);
+  if (!canvas || !state.zxingReader || !state.zxingImage) return "";
+  const wait = imageLoaded(state.zxingImage);
+  state.zxingImage.src = canvas.toDataURL("image/jpeg", 0.62);
+  await wait;
+  const result = await state.zxingReader.decodeFromImageElement(state.zxingImage);
+  return decodedBarcodeText(result);
+}
+
+async function runZxingRoiLoop() {
+  let attempts = 0;
+  while (state.scanLoopActive && state.zxingReader) {
+    if (shouldSkipDecode()) {
+      state.framesSkipped += 1;
+      updateDiagnostics({ frames_skipped: String(state.framesSkipped) });
+      await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
+      continue;
+    }
+    state.decodeInFlight = true;
+    const startedAt = performance.now();
+    try {
+      attempts += 1;
+      const barcode = await decodeZxingRoi(attempts % 16 === 0);
+      recordDecodeDuration(startedAt);
+      updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
+      if (barcode) {
+        updateDiagnostics({ last_raw_barcode: barcode });
+        await handleScan(barcode);
+      }
+    } catch {
+      state.decodeErrors += 1;
+      updateDiagnostics({ decode_errors: String(state.decodeErrors) });
+    } finally {
+      state.decodeInFlight = false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
+  }
 }
 
 async function startNativeScanLoop() {
@@ -1002,16 +1266,26 @@ async function startNativeScanLoop() {
 
 async function runNativeScanLoop() {
   while (state.scanLoopActive && state.detector) {
-    if (!state.sleeping && !state.pendingBarcode && els.preview.readyState >= 2) {
+    if (!shouldSkipDecode()) {
+      state.decodeInFlight = true;
+      const startedAt = performance.now();
       try {
         const codes = await state.detector.detect(els.preview);
         const barcode = decodedBarcodeText(codes[0]);
+        recordDecodeDuration(startedAt);
         updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
         if (barcode) updateDiagnostics({ last_raw_barcode: barcode });
         if (barcode) await handleScan(barcode);
       } catch {
+        state.decodeErrors += 1;
+        updateDiagnostics({ decode_errors: String(state.decodeErrors) });
         // Native barcode detection can throw while video focus/exposure settles.
+      } finally {
+        state.decodeInFlight = false;
       }
+    } else {
+      state.framesSkipped += 1;
+      updateDiagnostics({ frames_skipped: String(state.framesSkipped) });
     }
     await new Promise((resolve) => setTimeout(resolve, CAMERA_DETECT_INTERVAL_MS));
   }
@@ -1023,6 +1297,8 @@ function stopAutoScan() {
   state.zxingReader?.reset?.();
   state.zxingControls = null;
   state.zxingReader = null;
+  state.decodeInFlight = false;
+  state.activeDecoder = "none";
   state.detector = null;
   updateDiagnostics({ decoder_mode: "stopped" });
 }
@@ -1121,7 +1397,7 @@ async function resetScanner() {
 }
 
 async function clearCacheAndReload() {
-  const confirmed = window.confirm("Clear cached app shell and reload? Locally queued stocktake data remains in this browser database.");
+  const confirmed = await confirmDialog("Clear cache", "Clear cached app shell and reload? Locally queued stocktake data remains in this browser database.", "Clear & Reload");
   if (!confirmed) return;
   if ("serviceWorker" in navigator) {
     const registrations = await navigator.serviceWorker.getRegistrations();
@@ -1134,14 +1410,14 @@ async function clearCacheAndReload() {
   location.reload();
 }
 
-function processManualScan() {
+async function processManualScan() {
   const rawInput = els.manualBarcode.value;
   els.manualBarcode.value = "";
 
   const barcode = normalizeBarcode(rawInput);
   if (!barcode) return;
   if (state.pendingBarcode && state.pendingBarcode !== barcode) {
-    const replace = window.confirm("There is an unsaved scanned product. Replace it with this manual barcode?");
+    const replace = await confirmDialog("Replace pending scan", "There is an unsaved scanned product. Replace it with this manual barcode?", "Replace");
     if (!replace) {
       focusQuantity();
       return;
@@ -1239,6 +1515,17 @@ function bindEvents() {
     if (action === "confirm") confirmQuantity();
     renderQuantity();
   });
+  els.scanHud.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (button?.dataset.action === "describe-unknown") openUnknownDescription();
+  });
+  els.saveUnknownButton.addEventListener("click", saveUnknownDescription);
+  els.unknownNameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveUnknownDescription();
+    }
+  });
   els.undoButton.addEventListener("click", undoLastScan);
   els.linesButton.addEventListener("click", async () => {
     await renderLines();
@@ -1255,7 +1542,7 @@ function bindEvents() {
   });
   els.locationSelect.addEventListener("change", async () => {
     const rows = await scopedLines();
-    if (rows.length && !window.confirm("Switch location for new scans? Existing lines stay in their original location.")) {
+    if (rows.length && !(await confirmDialog("Switch location", "Switch location for new scans? Existing lines stay in their original location.", "Switch"))) {
       els.locationSelect.value = state.locationId;
       return;
     }
@@ -1273,7 +1560,7 @@ function bindEvents() {
   });
   els.changeSessionButton.addEventListener("click", async () => {
     const rows = await scopedLines();
-    if (rows.length && !window.confirm("Change session for new scans? Existing counted lines will stay in the current session.")) {
+    if (rows.length && !(await confirmDialog("Change session", "Change session for new scans? Existing counted lines will stay in the current session.", "Change"))) {
       return;
     }
     stopAutoScan();

@@ -378,6 +378,28 @@ label {
   flex-direction: column;
   gap: 10px;
 }
+.pw-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+}
+.pw-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+.pw-row {
+  grid-template-columns: minmax(0, 1fr) auto minmax(240px, 0.35fr);
+}
+.pw-link-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
 
 .task-row, .data-row, .missing-row {
   display: grid;

@@ -29,6 +29,7 @@
           <div class="auto-scan-badge" id="autoScanBadge">Auto Scan Off</div>
           <button class="icon-button" id="torchButton" type="button" title="Toggle flashlight">Flash</button>
           <button class="wake-button hidden" id="wakeButton" type="button">Tap to Wake Scanner</button>
+          <div class="scan-hud hidden" id="scanHud" aria-live="polite"></div>
           <div class="pulse hidden" id="pulse"></div>
         </div>
       </section>
@@ -128,6 +129,28 @@
       </form>
     </dialog>
 
+    <dialog id="unknownDialog">
+      <form method="dialog" class="dialog-shell unknown-shell">
+        <h2>Describe Unknown Product</h2>
+        <p id="unknownBarcodeText"></p>
+        <label for="unknownNameInput">Description</label>
+        <input id="unknownNameInput" placeholder="e.g. Grey Goose 70cl bottle">
+        <label for="unknownBinInput">BIN hint</label>
+        <input id="unknownBinInput" placeholder="Optional">
+        <button id="saveUnknownButton" type="button">Save Description</button>
+        <button value="cancel">Later</button>
+      </form>
+    </dialog>
+
+    <dialog id="confirmDialog">
+      <form method="dialog" class="dialog-shell confirm-shell">
+        <h2 id="confirmTitle">Confirm</h2>
+        <p id="confirmMessage"></p>
+        <button id="confirmOkButton" value="ok" type="button">Confirm</button>
+        <button id="confirmCancelButton" value="cancel" type="button">Cancel</button>
+      </form>
+    </dialog>
+
     <dialog id="diagnosticsDialog">
       <form method="dialog" class="dialog-shell diagnostics-shell">
         <header>
@@ -153,6 +176,6 @@
     </dialog>
 
     <script src="/vendor/zxing-library.min.js"></script>
-    <script src="/app.js?v=diag1" type="module"></script>
+    <script src="/app.js?v=pw-fast-1" type="module"></script>
   </body>
 </html>

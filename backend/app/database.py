@@ -7,13 +7,16 @@ from typing import Any
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DB_PATH = DATA_DIR / "stocktake.db"
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+_INITIALIZED_DB_PATH: Path | None = None
 
 
 def get_db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA busy_timeout = 10000")
     db.execute("PRAGMA foreign_keys = ON")
+    db.execute("PRAGMA synchronous = NORMAL")
     return db
 
 def normalize_identifier(value: Any) -> str:
@@ -30,8 +33,12 @@ def add_column_if_missing(db: sqlite3.Connection, table: str, column: str, defin
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-def init_db() -> None:
+def init_db(force: bool = False) -> None:
+    global _INITIALIZED_DB_PATH
+    if not force and _INITIALIZED_DB_PATH == DB_PATH and DB_PATH.exists():
+        return
     with get_db() as db:
+        db.execute("PRAGMA journal_mode = WAL")
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS synced_events (
@@ -140,6 +147,42 @@ def init_db() -> None:
                 after_json TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_imports (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                encoding TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                header_json TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_rows (
+                id TEXT PRIMARY KEY,
+                import_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                pid TEXT NOT NULL,
+                bin_number TEXT,
+                pos TEXT,
+                category TEXT,
+                description TEXT NOT NULL,
+                pack_size TEXT,
+                est_fc TEXT,
+                est_sc TEXT,
+                close_fc TEXT,
+                close_sc TEXT,
+                raw_json TEXT NOT NULL,
+                product_id TEXT,
+                match_status TEXT NOT NULL DEFAULT 'unmatched',
+                match_score REAL NOT NULL DEFAULT 0,
+                match_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(import_id) REFERENCES procurewizard_imports(id) ON DELETE CASCADE,
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+            );
             """
         )
         add_column_if_missing(db, "products", "photo_source_url", "TEXT")
@@ -174,7 +217,32 @@ def init_db() -> None:
             WHERE is_primary = 1
             """
         )
+        db.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_stocktake_lines_session_counted
+            ON stocktake_lines(session_id, counted_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_stocktake_lines_product_counted
+            ON stocktake_lines(product_id, counted_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_stocktake_lines_session_location_counted
+            ON stocktake_lines(session_id, location_id, counted_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_product_tasks_status_updated
+            ON product_tasks(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_product_barcodes_product_lookup
+            ON product_barcodes(product_id, is_primary, barcode);
+            CREATE INDEX IF NOT EXISTS idx_products_updated
+            ON products(product_updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_products_name_nocase
+            ON products(name COLLATE NOCASE);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_rows_import_pid
+            ON procurewizard_rows(import_id, pid);
+            CREATE INDEX IF NOT EXISTS idx_procurewizard_rows_product
+            ON procurewizard_rows(product_id);
+            CREATE INDEX IF NOT EXISTS idx_procurewizard_rows_status
+            ON procurewizard_rows(import_id, match_status, match_score DESC);
+            """
+        )
         db.commit()
+    _INITIALIZED_DB_PATH = DB_PATH
 
 def product_select_sql() -> str:
     return """

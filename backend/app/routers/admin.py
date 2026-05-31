@@ -10,13 +10,20 @@ from ..database import (
 from ..models import (
     LoginRequest, ProductPatchRequest, ProductUpsertRequest,
     TaskPatchRequest, TaskApproveRequest, BulkProductUpdateRequest,
-    BulkProductDeleteRequest, ProductBarcodeRequest, ProductMergeRequest
+    BulkProductDeleteRequest, ProductBarcodeRequest, ProductMergeRequest,
+    ProcureWizardImportRequest, ProcureWizardLinkRequest
 )
 from ..auth import (
     admin_password, create_admin_session, revoke_admin_session,
     require_admin, ADMIN_COOKIE
 )
 from ..services.enrichment import fetch_product_suggestion, save_product_image
+from ..services.procurewizard import (
+    build_procurewizard_csv,
+    import_procurewizard_csv,
+    import_summary,
+    link_procurewizard_row,
+)
 from .sync import enrich_task_by_id, pre_export, missing_bin_rows
 
 router = APIRouter()
@@ -190,6 +197,15 @@ def admin_dashboard(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) ->
             "draft_products": db.execute("SELECT COUNT(*) AS c FROM products WHERE draft_status = 'draft'").fetchone()["c"],
             "product_issues": len(product_issue_rows(db)),
             "tasks": db.execute("SELECT COUNT(*) AS c FROM product_tasks WHERE status != 'approved'").fetchone()["c"],
+            "pw_rows": db.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM procurewizard_rows
+                WHERE import_id = (
+                    SELECT id FROM procurewizard_imports WHERE active = 1 ORDER BY created_at DESC LIMIT 1
+                )
+                """
+            ).fetchone()["c"],
             "sessions": db.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"],
             "lines": db.execute("SELECT COUNT(*) AS c FROM stocktake_lines").fetchone()["c"],
         }
@@ -719,6 +735,59 @@ def admin_reject_task(
             db.execute("DELETE FROM products WHERE id = ?", (task["draft_product_id"],))
         db.commit()
     return {"task_id": task_id, "status": "rejected"}
+
+@router.post("/admin/api/procurewizard/import")
+def admin_import_procurewizard(
+    request: ProcureWizardImportRequest,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        try:
+            result = import_procurewizard_csv(db, request.filename, request.csv_text)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+@router.get("/admin/api/procurewizard/status")
+def admin_procurewizard_status(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        return import_summary(db)
+
+@router.patch("/admin/api/procurewizard/rows/{row_id}")
+def admin_link_procurewizard_row(
+    row_id: str,
+    request: ProcureWizardLinkRequest,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        try:
+            return link_procurewizard_row(db, row_id, request.product_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.get("/admin/api/procurewizard/export/{session_id}")
+def admin_export_procurewizard_csv(
+    session_id: str,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> Response:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        try:
+            filename, payload = build_procurewizard_csv(db, session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        payload,
+        media_type="text/csv; charset=windows-1252",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 @router.get("/admin/api/sessions")
 def admin_sessions(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:

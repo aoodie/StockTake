@@ -268,8 +268,10 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
                 id, barcode, bin, name, category, size, unit, photo_url, notes,
                 draft_status, product_updated_at
             )
-            VALUES (?, ?, '', ?, '', '', 'each', ?, ?, 'draft', ?)
+            VALUES (?, ?, ?, ?, '', '', 'each', ?, ?, 'draft', ?)
             ON CONFLICT(id) DO UPDATE SET
+                bin = CASE WHEN products.draft_status = 'draft' THEN excluded.bin ELSE products.bin END,
+                name = CASE WHEN products.draft_status = 'draft' THEN excluded.name ELSE products.name END,
                 photo_url = COALESCE(products.photo_url, excluded.photo_url),
                 notes = excluded.notes,
                 product_updated_at = excluded.product_updated_at
@@ -277,6 +279,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
             (
                 product_id,
                 barcode,
+                payload.get("bin", ""),
                 payload.get("placeholder_name", "Draft Product"),
                 payload.get("photo_url"),
                 payload.get("notes"),
@@ -353,13 +356,42 @@ def catalog() -> dict:
     ensure_default_rows()
     with get_db() as db:
         products = db.execute(f"{product_select_sql()} ORDER BY name").fetchall()
+        product_payload = []
+        for row in products:
+            product = dict(row)
+            product["barcodes"] = [
+                dict(alias)
+                for alias in db.execute(
+                    """
+                    SELECT barcode, label, is_primary
+                    FROM product_barcodes
+                    WHERE product_id = ?
+                    ORDER BY is_primary DESC, barcode
+                    """,
+                    (product["id"],),
+                ).fetchall()
+            ]
+            procurewizard = db.execute(
+                """
+                SELECT pwr.pid, pwr.bin_number, pwr.pos, pwr.pack_size, pwr.match_status,
+                       pwi.id AS import_id, pwi.filename
+                FROM procurewizard_rows pwr
+                JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
+                WHERE pwr.product_id = ?
+                ORDER BY pwr.row_index
+                LIMIT 1
+                """,
+                (product["id"],),
+            ).fetchone()
+            product["procurewizard"] = dict(procurewizard) if procurewizard else None
+            product_payload.append(product)
         locations = db.execute("SELECT id, name FROM locations ORDER BY name").fetchall()
         sessions = db.execute(
             "SELECT id, name, period_date FROM sessions ORDER BY period_date DESC"
         ).fetchall()
     return {
         "catalog_version": now_iso(),
-        "products": [dict(row) for row in products],
+        "products": product_payload,
         "locations": [dict(row) for row in locations],
         "sessions": [dict(row) for row in sessions],
     }
