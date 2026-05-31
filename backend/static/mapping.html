@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#101820">
+    <title>StockTake Mapping</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="mapping-body">
+    <main class="mapping-shell">
+      <section id="mappingLoginView" class="mapping-login">
+        <form id="mappingLoginForm" class="mapping-card">
+          <p class="mapping-kicker">Barcode Mapping</p>
+          <h1>Pair shelf barcodes to products</h1>
+          <label for="mappingPassword">Admin password</label>
+          <input id="mappingPassword" type="password" autocomplete="current-password" required>
+          <button type="submit">Unlock Mapping</button>
+          <p id="mappingLoginError" class="mapping-error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="mappingAppView" class="hidden">
+        <header class="mapping-topbar">
+          <div>
+            <p class="mapping-kicker">Phone Mapper</p>
+            <h1>Scan barcode first</h1>
+          </div>
+          <a href="/" class="mapping-link">Stocktake</a>
+        </header>
+
+        <section class="mapping-camera" id="mappingCameraPanel">
+          <video id="mappingPreview" playsinline muted></video>
+          <div class="mapping-camera-overlay">
+            <span id="mappingScanStatus">Camera starting</span>
+            <button id="mappingRetryCamera" type="button">Retry</button>
+          </div>
+        </section>
+
+        <form id="mappingManualForm" class="mapping-manual">
+          <input id="mappingManualBarcode" inputmode="numeric" autocomplete="off" placeholder="Scan or type barcode">
+          <button type="submit">Lookup</button>
+        </form>
+
+        <section id="mappingResultCard" class="mapping-card mapping-result">
+          <p class="mapping-kicker">Waiting for barcode</p>
+          <h2>Scan a bottle or case barcode</h2>
+          <p>When the barcode is not already mapped, choose an existing product or add it as a new catalog item.</p>
+        </section>
+
+        <section id="mappingActions" class="mapping-action-grid hidden">
+          <button id="mappingShowExisting" type="button">Map to Existing Product</button>
+          <button id="mappingShowCreate" type="button">Add New Product</button>
+          <button id="mappingScanNext" class="mapping-secondary" type="button">Scan Next</button>
+          <button id="mappingClear" class="mapping-secondary" type="button">Clear</button>
+        </section>
+
+        <section id="mappingExistingPanel" class="mapping-card mapping-panel hidden">
+          <h2>Choose product</h2>
+          <form id="mappingProductSearchForm" class="mapping-search">
+            <input id="mappingProductSearch" placeholder="Search name, BIN, PID, category">
+            <button type="submit">Search</button>
+          </form>
+          <div id="mappingProductResults" class="mapping-product-results"></div>
+        </section>
+
+        <section id="mappingCreatePanel" class="mapping-card mapping-panel hidden">
+          <h2>Add new product</h2>
+          <form id="mappingCreateForm" class="mapping-create-form">
+            <label>Name<input id="mappingCreateName" required></label>
+            <label>BIN<input id="mappingCreateBin" placeholder="Optional"></label>
+            <label>Category<input id="mappingCreateCategory"></label>
+            <label>Size<input id="mappingCreateSize" placeholder="e.g. 70cl"></label>
+            <label>Unit<input id="mappingCreateUnit" value="each"></label>
+            <label>Photo URL<input id="mappingCreatePhoto"></label>
+            <label>Notes<textarea id="mappingCreateNotes" rows="3"></textarea></label>
+            <button type="submit">Create Product</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script src="/vendor/zxing-library.min.js"></script>
+    <script src="/mapping.js?v=phone-mapping-1" type="module"></script>
+  </body>
+</html>

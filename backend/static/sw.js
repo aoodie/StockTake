@@ -1,10 +1,14 @@
-const CACHE_NAME = "stocktake-v5";
+const CACHE_NAME = "stocktake-v6";
 const APP_SHELL = [
   "/",
   "/index.html",
+  "/mapping",
+  "/mapping.html",
   "/styles.css",
   "/app.js?v=pw-fast-1",
+  "/mapping.js?v=phone-mapping-1",
   "/frontend-utils.js?v=pw-fast-1",
+  "/frontend-utils.js?v=phone-mapping-1",
   "/manifest.webmanifest",
   "/vendor/zxing-library.min.js"
 ];
@@ -34,6 +38,7 @@ self.addEventListener("fetch", (event) => {
     "/pre-export/",
     "/export/",
     "/admin",
+    "/admin/api/",
     "/product-images/"
   ].some((path) => url.pathname.startsWith(path));
   if (isApiLike) {

@@ -32,5 +32,9 @@ if IMAGE_DIR.exists() or True:
 def admin_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "admin.html")
 
+@app.get("/mapping")
+def mapping_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "mapping.html")
+
 if STATIC_DIR.exists():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="web")

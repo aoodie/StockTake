@@ -19,6 +19,13 @@ def test_weak_password_can_be_explicitly_allowed_for_temporary_demo(monkeypatch)
     auth.validate_password_strength("demo")
 
 
+def test_mapping_page_is_served():
+    client = TestClient(app)
+    response = client.get("/mapping")
+    assert response.status_code == 200
+    assert "mapping.js?v=phone-mapping-1" in response.text
+
+
 def test_secure_session_validation(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
