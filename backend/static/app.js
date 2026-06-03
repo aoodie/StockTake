@@ -12,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=scanner-recover-1";
+} from "./frontend-utils.js?v=scanner-recover-2";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -102,6 +102,7 @@ let diagnostics = {
   video_ready: "0",
   video_size: "-",
   decoder_mode: "none",
+  zxing_loader: "checking",
   supported_formats: "-",
   decoder_heartbeat: "never",
   last_raw_barcode: "-",
@@ -126,6 +127,7 @@ const DIAGNOSTIC_LABELS = {
   video_ready: "Video Ready",
   video_size: "Video Size",
   decoder_mode: "Decoder",
+  zxing_loader: "ZXing Loader",
   supported_formats: "Formats",
   decoder_heartbeat: "Decoder Heartbeat",
   last_raw_barcode: "Last Raw Barcode",
@@ -160,6 +162,7 @@ let state = {
   detector: null,
   zxingReader: null,
   zxingControls: null,
+  zxingLoadPromise: null,
   zxingCanvas: null,
   zxingImage: null,
   decodeInFlight: false,
@@ -1145,16 +1148,54 @@ async function startScanLoop() {
   setAutoScan(false);
 }
 
+function currentZxing() {
+  return window.ZXing || globalThis.ZXing || null;
+}
+
+function loadZxingScript() {
+  if (currentZxing()?.BrowserMultiFormatReader) {
+    updateDiagnostics({ zxing_loader: "ready" });
+    return Promise.resolve(currentZxing());
+  }
+  if (state.zxingLoadPromise) return state.zxingLoadPromise;
+  updateDiagnostics({ zxing_loader: "loading" });
+  state.zxingLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/vendor/zxing-library.min.js?v=scanner-recover-2";
+    script.async = true;
+    script.onload = () => {
+      const zxing = currentZxing();
+      if (zxing?.BrowserMultiFormatReader) {
+        updateDiagnostics({ zxing_loader: "ready" });
+        resolve(zxing);
+        return;
+      }
+      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing loaded without reader" });
+      reject(new Error("ZXing reader unavailable"));
+    };
+    script.onerror = () => {
+      updateDiagnostics({ zxing_loader: "failed", last_error: "ZXing script failed" });
+      reject(new Error("ZXing script failed"));
+    };
+    document.head.appendChild(script);
+  }).catch((error) => {
+    state.zxingLoadPromise = null;
+    throw error;
+  });
+  return state.zxingLoadPromise;
+}
+
 async function startZxingScanLoop() {
-  if (window.ZXing?.BrowserMultiFormatReader) {
+  const zxing = await loadZxingScript().catch(() => null);
+  if (zxing?.BrowserMultiFormatReader) {
     const hints = new Map();
     const formats = ZXING_FAST_FORMATS
-      .map((format) => window.ZXing.BarcodeFormat?.[format])
+      .map((format) => zxing.BarcodeFormat?.[format])
       .filter((format) => format !== undefined);
-    if (window.ZXing.DecodeHintType?.POSSIBLE_FORMATS) {
-      hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    if (zxing.DecodeHintType?.POSSIBLE_FORMATS) {
+      hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, formats);
     }
-    state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, ZXING_DETECT_INTERVAL_MS);
+    state.zxingReader = new zxing.BrowserMultiFormatReader(hints, ZXING_DETECT_INTERVAL_MS);
     state.zxingCanvas = state.zxingCanvas || document.createElement("canvas");
     state.zxingImage = state.zxingImage || new Image();
     runZxingRoiLoop();
