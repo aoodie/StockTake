@@ -12,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=pw-fast-1";
+} from "./frontend-utils.js?v=scanner-recover-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -1480,12 +1480,7 @@ function bindEvents() {
   els.bulkMode.addEventListener("click", () => setMode("bulk"));
   els.manualScanButton.addEventListener("click", processManualScan);
   els.retryCameraButton.addEventListener("click", () => {
-    setSyncStatus("Opening camera...");
-    startCamera().catch((error) => {
-      setAutoScan(false);
-      updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
-      setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
-    });
+    resetScanner();
   });
   els.manualBarcode.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -1572,8 +1567,12 @@ function bindEvents() {
     state.sleeping = false;
     els.scannerPanel.classList.remove("sleep");
     els.wakeButton.classList.add("hidden");
-    setAutoScan(!!state.stream);
     resetInactivityTimer();
+    if (!state.stream?.active) {
+      resetScanner();
+      return;
+    }
+    setAutoScan(true);
   });
   els.exportButton.addEventListener("click", showExportReview);
   els.diagnosticsButton.addEventListener("click", () => {
