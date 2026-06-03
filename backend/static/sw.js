@@ -1,16 +1,16 @@
-const CACHE_NAME = "stocktake-v11";
+const CACHE_NAME = "stocktake-v12";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/mapping",
   "/mapping.html",
   "/styles.css",
-  "/app.js?v=scanner-diagnostics-1",
+  "/app.js?v=scanner-camera-1",
   "/mapping.js?v=phone-mapping-3",
-  "/frontend-utils.js?v=scanner-diagnostics-1",
+  "/frontend-utils.js?v=scanner-camera-1",
   "/frontend-utils.js?v=phone-mapping-3",
   "/manifest.webmanifest",
-  "/vendor/zxing-library.min.js?v=scanner-diagnostics-1"
+  "/vendor/zxing-library.min.js?v=scanner-camera-1"
 ];
 
 self.addEventListener("install", (event) => {

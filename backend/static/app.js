@@ -12,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=scanner-diagnostics-1";
+} from "./frontend-utils.js?v=scanner-camera-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -164,6 +164,7 @@ let state = {
   zxingReader: null,
   zxingControls: null,
   zxingLoadPromise: null,
+  cameraStartPromise: null,
   zxingCanvas: null,
   zxingImage: null,
   decodeInFlight: false,
@@ -171,6 +172,7 @@ let state = {
   framesSkipped: 0,
   decodeSamples: [],
   activeDecoder: "none",
+  sessionStarting: false,
   pendingUnknownProduct: null,
   hudTimer: null,
   stream: null,
@@ -462,9 +464,15 @@ async function showSessionDialog(force = false) {
       const period = selected?.id === sessionId ? selected.period_date : today();
       const locationId = els.sessionLocationSelect.value || state.locationId;
       const locationName = els.sessionLocationSelect.selectedOptions[0]?.textContent || locationId;
-      await applySessionSelection(sessionId, sessionName, period, locationId, locationName);
       els.sessionDialog.close("started");
-      resolve();
+      state.sessionStarting = true;
+      ensureCameraStarted().catch(reportCameraError);
+      try {
+        await applySessionSelection(sessionId, sessionName, period, locationId, locationName);
+      } finally {
+        state.sessionStarting = false;
+        resolve();
+      }
     };
     els.startSessionButton.addEventListener("click", onStart, { once: true });
   });
@@ -1130,6 +1138,24 @@ async function startCamera() {
   startScanLoop();
 }
 
+function reportCameraError(error) {
+  setAutoScan(false);
+  updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
+  setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
+}
+
+function ensureCameraStarted() {
+  if (state.stream?.active && els.preview.srcObject) {
+    updateDiagnostics(videoDiagnostics());
+    return Promise.resolve();
+  }
+  if (state.cameraStartPromise) return state.cameraStartPromise;
+  state.cameraStartPromise = startCamera().finally(() => {
+    state.cameraStartPromise = null;
+  });
+  return state.cameraStartPromise;
+}
+
 async function startScanLoop() {
   state.scanLoopActive = true;
   const nativeStarted = await startNativeScanLoop();
@@ -1162,7 +1188,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-diagnostics-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-camera-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1214,7 +1240,7 @@ function recordDecodeDuration(startedAt) {
 }
 
 function shouldSkipDecode() {
-  if (state.sleeping || state.scanInFlight || document.hidden || els.preview.readyState < 2) return true;
+  if (state.sleeping || state.sessionStarting || state.scanInFlight || document.hidden || els.preview.readyState < 2) return true;
   return state.mode !== "multi" && Boolean(state.pendingBarcode);
 }
 
@@ -1460,11 +1486,7 @@ async function resetScanner() {
     last_rejected_reason: "-",
     last_error: "-"
   });
-  await startCamera().catch((error) => {
-    setAutoScan(false);
-    updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
-    setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
-  });
+  await ensureCameraStarted().catch(reportCameraError);
 }
 
 async function clearCacheAndReload() {
@@ -1689,11 +1711,7 @@ async function init() {
   await renderLines();
   await syncEvents();
   resetInactivityTimer();
-  startCamera().catch((error) => {
-    setAutoScan(false);
-    updateDiagnostics({ last_error: `${error.name || "camera"}: ${error.message || "blocked"}` });
-    setSyncStatus(`Camera blocked: ${error.name || "denied"}`);
-  });
+  ensureCameraStarted().catch(reportCameraError);
 }
 
 init();
