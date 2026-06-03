@@ -31,7 +31,7 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=ai-copilot-1" in response.text
+    assert "admin.js?v=ai-copilot-2" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -750,15 +750,15 @@ def test_product_patch_rejects_barcode_changes(tmp_path, monkeypatch):
 
 
 def test_ai_copilot_generates_and_applies_product_issue_suggestion(tmp_path, monkeypatch):
-    from app.routers import admin
+    from app.routers import ai
     from app.services import enrichment
 
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
-    monkeypatch.setattr(enrichment, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(enrichment, "openai_api_key", lambda: "")
     monkeypatch.setattr(
-        admin,
+        ai,
         "fetch_product_suggestion",
         lambda barcode: {
             "barcode": barcode,
@@ -819,15 +819,15 @@ def test_ai_copilot_generates_and_applies_product_issue_suggestion(tmp_path, mon
 
 
 def test_ai_copilot_reject_keeps_catalog_unchanged(tmp_path, monkeypatch):
-    from app.routers import admin
+    from app.routers import ai
     from app.services import enrichment
 
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
-    monkeypatch.setattr(enrichment, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(enrichment, "openai_api_key", lambda: "")
     monkeypatch.setattr(
-        admin,
+        ai,
         "fetch_product_suggestion",
         lambda barcode: {
             "barcode": barcode,
@@ -864,7 +864,7 @@ def test_ai_copilot_reject_keeps_catalog_unchanged(tmp_path, monkeypatch):
     assert detail["category"] == ""
 
 
-def test_admin_can_change_openai_model_setting(tmp_path, monkeypatch):
+def test_admin_can_change_openai_model_and_token_setting(tmp_path, monkeypatch):
     from app.services import enrichment
 
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
@@ -872,6 +872,7 @@ def test_admin_can_change_openai_model_setting(tmp_path, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-env-default")
     monkeypatch.setattr(enrichment, "DEFAULT_OPENAI_MODEL", "gpt-env-default")
+    monkeypatch.setattr(enrichment, "OPENAI_API_KEY_FILE", tmp_path / "openai_api_key.txt")
     client = TestClient(app)
     database.init_db()
     assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
@@ -879,11 +880,32 @@ def test_admin_can_change_openai_model_setting(tmp_path, monkeypatch):
     current = client.get("/admin/api/settings/llm")
     assert current.status_code == 200
     assert current.json()["openai_model"] == "gpt-env-default"
+    assert current.json()["has_openai_key"] is False
 
-    saved = client.patch("/admin/api/settings/llm", json={"openai_model": "gpt-4.1"})
+    saved = client.patch(
+        "/admin/api/settings/llm",
+        json={"openai_model": "gpt-4.1", "openai_api_key": "sk-test-token-1234567890"},
+    )
     assert saved.status_code == 200
     assert saved.json()["openai_model"] == "gpt-4.1"
+    assert saved.json()["has_openai_key"] is True
+    assert saved.json()["openai_key_source"] == "admin"
     assert enrichment.openai_model() == "gpt-4.1"
+    assert enrichment.openai_api_key() == "sk-test-token-1234567890"
 
     invalid = client.patch("/admin/api/settings/llm", json={"openai_model": "bad model name"})
     assert invalid.status_code == 400
+
+    too_short = client.patch(
+        "/admin/api/settings/llm",
+        json={"openai_model": "gpt-4.1", "openai_api_key": "short"},
+    )
+    assert too_short.status_code == 400
+
+    cleared = client.patch(
+        "/admin/api/settings/llm",
+        json={"openai_model": "gpt-4.1", "clear_openai_api_key": True},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["has_openai_key"] is False
+    assert enrichment.openai_api_key() == ""

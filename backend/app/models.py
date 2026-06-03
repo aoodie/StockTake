@@ -114,3 +114,5 @@ class AiSuggestionApplyRequest(BaseModel):
 
 class LlmSettingsRequest(BaseModel):
     openai_model: str = Field(min_length=1, max_length=120)
+    openai_api_key: str | None = Field(default=None, min_length=1, max_length=500)
+    clear_openai_api_key: bool = False

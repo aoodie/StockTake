@@ -5,14 +5,37 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 import httpx
-from ..database import get_db, get_setting, now_iso
+from ..database import DATA_DIR, get_db, get_setting, now_iso
 
 IMAGE_DIR = Path(__file__).resolve().parents[2] / "data" / "product-images"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+OPENAI_API_KEY_FILE = DATA_DIR / "openai_api_key.txt"
 
 def openai_model() -> str:
     return get_setting("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
+
+def openai_api_key() -> str:
+    if OPENAI_API_KEY_FILE.exists():
+        return OPENAI_API_KEY_FILE.read_text(encoding="utf-8").strip()
+    return os.getenv("OPENAI_API_KEY", "").strip()
+
+def openai_key_status() -> dict[str, str | bool]:
+    key = openai_api_key()
+    if not key:
+        return {"has_openai_key": False, "openai_key_source": "none", "openai_key_preview": ""}
+    source = "admin" if OPENAI_API_KEY_FILE.exists() else "environment"
+    preview = f"{key[:6]}...{key[-4:]}" if len(key) > 12 else "configured"
+    return {"has_openai_key": True, "openai_key_source": source, "openai_key_preview": preview}
+
+def save_openai_api_key(api_key: str) -> None:
+    key = api_key.strip()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    OPENAI_API_KEY_FILE.write_text(f"{key}\n", encoding="utf-8")
+    OPENAI_API_KEY_FILE.chmod(0o600)
+
+def clear_openai_api_key() -> None:
+    if OPENAI_API_KEY_FILE.exists():
+        OPENAI_API_KEY_FILE.unlink()
 
 def parse_open_food_facts(product: dict, barcode: str) -> dict:
     name = product.get("product_name") or product.get("generic_name") or f"Product {barcode}"
@@ -64,7 +87,8 @@ def extract_json_object(text: str) -> dict:
         return {}
 
 def llm_refine_product(suggestion: dict) -> dict:
-    if not OPENAI_API_KEY:
+    api_key = openai_api_key()
+    if not api_key:
         return suggestion
     prompt = (
         "Return only compact JSON for a stocktaking product record. "
@@ -88,7 +112,7 @@ def llm_refine_product(suggestion: dict) -> dict:
             response = client.post(
                 url,
                 headers={
-                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
@@ -106,7 +130,7 @@ def llm_refine_product(suggestion: dict) -> dict:
                 response = client.post(
                     fallback_url,
                     headers={
-                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json=fallback_payload,
@@ -166,7 +190,8 @@ def _clean_field_values(values: dict[str, Any]) -> dict[str, str]:
     return cleaned
 
 def _llm_refine_ai_suggestion(evidence: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
-    if not OPENAI_API_KEY:
+    api_key = openai_api_key()
+    if not api_key:
         return draft
     prompt = (
         "You are an admin-side product data copilot for a bar stocktake system. "
@@ -189,7 +214,7 @@ def _llm_refine_ai_suggestion(evidence: dict[str, Any], draft: dict[str, Any]) -
             response = client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json=payload,

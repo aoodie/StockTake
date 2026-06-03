@@ -409,7 +409,7 @@ label {
 }
 .llm-settings-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1fr) auto auto;
   gap: 8px;
   align-items: end;
   padding: 12px;
@@ -419,6 +419,11 @@ label {
 }
 .llm-settings-form .field-note {
   grid-column: 1 / -1;
+}
+.llm-clear-row {
+  min-height: 40px;
+  align-self: end;
+  white-space: nowrap;
 }
 .ai-principle {
   display: flex;

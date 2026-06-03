@@ -44,6 +44,8 @@ const els = {
   reloadAiSuggestionsButton: document.querySelector("#reloadAiSuggestionsButton"),
   llmSettingsForm: document.querySelector("#llmSettingsForm"),
   openaiModelInput: document.querySelector("#openaiModelInput"),
+  openaiTokenInput: document.querySelector("#openaiTokenInput"),
+  clearOpenaiTokenInput: document.querySelector("#clearOpenaiTokenInput"),
   llmSettingsStatus: document.querySelector("#llmSettingsStatus"),
   productSearchForm: document.querySelector("#productSearchForm"),
   productSearch: document.querySelector("#productSearch"),
@@ -411,7 +413,12 @@ async function loadLlmSettings() {
     const data = await api("/admin/api/settings/llm");
     state.llmSettings = data;
     els.openaiModelInput.value = data.openai_model || "";
-    els.llmSettingsStatus.textContent = `${data.has_openai_key ? "API key configured" : "No API key"} · Env default: ${data.env_default || "none"}`;
+    els.openaiTokenInput.value = "";
+    els.clearOpenaiTokenInput.checked = false;
+    const keyText = data.has_openai_key
+      ? `Token configured (${data.openai_key_source}: ${data.openai_key_preview})`
+      : "No token";
+    els.llmSettingsStatus.textContent = `${keyText} · Env default: ${data.env_default || "none"}`;
     els.llmSettingsStatus.classList.toggle("error", !data.has_openai_key);
   } catch (err) {
     els.llmSettingsStatus.textContent = err.message;
@@ -421,17 +428,26 @@ async function loadLlmSettings() {
 
 async function saveLlmSettings() {
   const openai_model = els.openaiModelInput.value.trim();
+  const openai_api_key = els.openaiTokenInput.value.trim();
+  const clear_openai_api_key = els.clearOpenaiTokenInput.checked;
   if (!openai_model) {
     showToast("OpenAI model is required.", "error");
     return;
   }
   try {
+    const payload = { openai_model, clear_openai_api_key };
+    if (openai_api_key) payload.openai_api_key = openai_api_key;
     const data = await api("/admin/api/settings/llm", {
       method: "PATCH",
-      body: JSON.stringify({ openai_model })
+      body: JSON.stringify(payload)
     });
     state.llmSettings = data;
-    els.llmSettingsStatus.textContent = `Saved. New AI requests will use ${data.openai_model}.`;
+    els.openaiTokenInput.value = "";
+    els.clearOpenaiTokenInput.checked = false;
+    const keyText = data.has_openai_key
+      ? `Token configured (${data.openai_key_source}: ${data.openai_key_preview})`
+      : "No token";
+    els.llmSettingsStatus.textContent = `Saved. New AI requests will use ${data.openai_model}. ${keyText}.`;
     els.llmSettingsStatus.classList.remove("error");
     showToast(`OpenAI model set to ${data.openai_model}`);
   } catch (err) {

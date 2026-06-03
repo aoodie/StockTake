@@ -4,13 +4,14 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from .database import init_db, ensure_default_rows, DATA_DIR, STATIC_DIR
 from .auth import admin_password
-from .routers import sync, admin
+from .routers import sync, admin, ai
 
 app = FastAPI(title="StockTake Backend")
 
 # Register routers
 app.include_router(sync.router)
 app.include_router(admin.router)
+app.include_router(ai.router)
 
 @app.on_event("startup")
 def startup() -> None:

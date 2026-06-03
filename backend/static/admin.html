@@ -106,6 +106,13 @@
               <label>OpenAI model
                 <input id="openaiModelInput" autocomplete="off" spellcheck="false" placeholder="gpt-4.1-mini">
               </label>
+              <label>OpenAI token
+                <input id="openaiTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="Paste token to update">
+              </label>
+              <label class="toggle-row llm-clear-row">
+                <input id="clearOpenaiTokenInput" type="checkbox">
+                <span>Clear saved token</span>
+              </label>
               <button class="secondary" type="submit">Save Model</button>
               <p id="llmSettingsStatus" class="field-note"></p>
             </form>
@@ -351,6 +358,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=ai-copilot-1" type="module"></script>
+    <script src="/admin.js?v=ai-copilot-2" type="module"></script>
   </body>
 </html>
