@@ -26,6 +26,14 @@ def test_mapping_page_is_served():
     assert "mapping.js?v=phone-mapping-3" in response.text
 
 
+def test_admin_page_loads_ai_copilot_bundle():
+    client = TestClient(app)
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "AI Product Copilot" in response.text
+    assert "admin.js?v=ai-copilot-1" in response.text
+
+
 def test_secure_session_validation(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
@@ -739,3 +747,143 @@ def test_product_patch_rejects_barcode_changes(tmp_path, monkeypatch):
 
     regular_edit = client.patch("/admin/api/products/product-dup-a", json={"bin": "A-2", "category": "Wine"})
     assert regular_edit.status_code == 200
+
+
+def test_ai_copilot_generates_and_applies_product_issue_suggestion(tmp_path, monkeypatch):
+    from app.routers import admin
+    from app.services import enrichment
+
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    monkeypatch.setattr(enrichment, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(
+        admin,
+        "fetch_product_suggestion",
+        lambda barcode: {
+            "barcode": barcode,
+            "name": "AI Filled Lager",
+            "brand": "Demo Brewery",
+            "category": "Beer",
+            "size": "330ml",
+            "unit": "bottle",
+            "image_url": "https://example.test/lager.jpg",
+            "image_candidates": ["https://example.test/lager.jpg"],
+            "source_urls": ["https://example.test/product/501"],
+            "source_name": "Test Lookup",
+            "confidence": 0.88,
+        },
+    )
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    product = client.post(
+        "/admin/api/products",
+        json={
+            "barcode": "501",
+            "name": "Draft 501",
+            "bin": "",
+            "unit": "each",
+            "draft_status": "draft",
+        },
+    )
+    assert product.status_code == 200
+
+    generated = client.post("/admin/api/ai-suggestions/generate-issues", json={"limit": 5})
+    assert generated.status_code == 200
+    suggestions = generated.json()["suggestions"]
+    assert suggestions
+    suggestion = suggestions[0]
+    assert suggestion["status"] == "pending"
+    assert suggestion["field_values"]["name"] == "AI Filled Lager"
+    assert suggestion["field_values"]["unit"] == "bottle"
+
+    listed = client.get("/admin/api/ai-suggestions")
+    assert listed.status_code == 200
+    assert listed.json()["suggestions"][0]["id"] == suggestion["id"]
+
+    applied = client.post(f"/admin/api/ai-suggestions/{suggestion['id']}/apply", json={})
+    assert applied.status_code == 200
+    assert set(applied.json()["fields"]).issuperset({"name", "category", "size", "unit", "photo_url"})
+
+    detail = client.get("/admin/api/products/product-501")
+    assert detail.status_code == 200
+    applied_product = detail.json()["product"]
+    assert applied_product["name"] == "AI Filled Lager"
+    assert applied_product["category"] == "Beer"
+    assert applied_product["size"] == "330ml"
+    assert applied_product["unit"] == "bottle"
+    assert applied_product["photo_url"] == "https://example.test/lager.jpg"
+    assert applied_product["draft_status"] == "confirmed"
+
+
+def test_ai_copilot_reject_keeps_catalog_unchanged(tmp_path, monkeypatch):
+    from app.routers import admin
+    from app.services import enrichment
+
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    monkeypatch.setattr(enrichment, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(
+        admin,
+        "fetch_product_suggestion",
+        lambda barcode: {
+            "barcode": barcode,
+            "name": "Rejected AI Name",
+            "category": "Wine",
+            "size": "75cl",
+            "unit": "bottle",
+            "image_url": "",
+            "source_urls": [],
+            "source_name": "Test Lookup",
+            "confidence": 0.8,
+        },
+    )
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+    assert client.post(
+        "/admin/api/products",
+        json={"barcode": "777", "name": "Draft 777", "bin": "", "draft_status": "draft"},
+    ).status_code == 200
+
+    generated = client.post(
+        "/admin/api/ai-suggestions/generate",
+        json={"product_id": "product-777", "force": True},
+    )
+    assert generated.status_code == 200
+    suggestion_id = generated.json()["suggestion"]["id"]
+
+    rejected = client.post(f"/admin/api/ai-suggestions/{suggestion_id}/reject", json={})
+    assert rejected.status_code == 200
+
+    detail = client.get("/admin/api/products/product-777").json()["product"]
+    assert detail["name"] == "Draft 777"
+    assert detail["category"] == ""
+
+
+def test_admin_can_change_openai_model_setting(tmp_path, monkeypatch):
+    from app.services import enrichment
+
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-env-default")
+    monkeypatch.setattr(enrichment, "DEFAULT_OPENAI_MODEL", "gpt-env-default")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    current = client.get("/admin/api/settings/llm")
+    assert current.status_code == 200
+    assert current.json()["openai_model"] == "gpt-env-default"
+
+    saved = client.patch("/admin/api/settings/llm", json={"openai_model": "gpt-4.1"})
+    assert saved.status_code == 200
+    assert saved.json()["openai_model"] == "gpt-4.1"
+    assert enrichment.openai_model() == "gpt-4.1"
+
+    invalid = client.patch("/admin/api/settings/llm", json={"openai_model": "bad model name"})
+    assert invalid.status_code == 400

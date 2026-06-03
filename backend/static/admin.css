@@ -401,6 +401,121 @@ label {
   gap: 8px;
 }
 
+.ai-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(320px, 0.8fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.llm-settings-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+}
+.llm-settings-form .field-note {
+  grid-column: 1 / -1;
+}
+.ai-principle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(20, 184, 166, 0.24);
+  border-radius: var(--radius-md);
+  background: rgba(20, 184, 166, 0.08);
+}
+.ai-principle strong {
+  color: #99f6e4;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.ai-principle span {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.ai-suggestion-list {
+  display: grid;
+  gap: 12px;
+}
+.ai-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-sm);
+}
+.ai-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: start;
+}
+.ai-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(260px, 0.75fr);
+  gap: 14px;
+}
+.ai-field-grid,
+.ai-evidence {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.ai-field-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+.ai-field-row span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.ai-field-row strong {
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.ai-evidence {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.14);
+}
+.ai-evidence h4 {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ai-evidence p,
+.ai-evidence a {
+  font-size: 13px;
+}
+.ai-evidence a {
+  display: block;
+  color: #a5b4fc;
+  overflow-wrap: anywhere;
+}
+.ai-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .mapping-toolbar {
   display: flex;
   align-items: center;
@@ -987,6 +1102,21 @@ dialog footer {
   }
   .task-row, .data-row, .missing-row, .inline-form, .mapping-console, .mapping-row {
     grid-template-columns: 1fr;
+  }
+  .ai-toolbar,
+  .ai-card-head,
+  .ai-card-body,
+  .ai-field-row {
+    grid-template-columns: 1fr;
+  }
+  .llm-settings-form {
+    grid-template-columns: 1fr;
+  }
+  .ai-actions {
+    justify-content: stretch;
+  }
+  .ai-actions button {
+    width: 100%;
   }
   .mapping-active-head {
     grid-template-columns: 56px minmax(0, 1fr);

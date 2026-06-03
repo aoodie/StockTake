@@ -130,6 +130,12 @@ def init_db(force: bool = False) -> None:
                 cached_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS product_barcodes (
                 barcode TEXT PRIMARY KEY,
                 product_id TEXT NOT NULL,
@@ -159,6 +165,26 @@ def init_db(force: bool = False) -> None:
                 details_json TEXT,
                 created_at TEXT NOT NULL,
                 undone_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_suggestions (
+                id TEXT PRIMARY KEY,
+                target_type TEXT NOT NULL,
+                target_id TEXT,
+                barcode TEXT,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                suggestion_json TEXT NOT NULL,
+                field_values_json TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0,
+                risk_level TEXT NOT NULL DEFAULT 'review',
+                reasons_json TEXT NOT NULL DEFAULT '[]',
+                sources_json TEXT NOT NULL DEFAULT '[]',
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                applied_at TEXT,
+                rejected_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS procurewizard_imports (
@@ -250,6 +276,10 @@ def init_db(force: bool = False) -> None:
             ON barcode_mapping_audit(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_barcode_mapping_audit_barcode
             ON barcode_mapping_audit(barcode);
+            CREATE INDEX IF NOT EXISTS idx_ai_suggestions_status_updated
+            ON ai_suggestions(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ai_suggestions_target
+            ON ai_suggestions(target_type, target_id, status);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_rows_import_pid
             ON procurewizard_rows(import_id, pid);
             CREATE INDEX IF NOT EXISTS idx_procurewizard_rows_product
@@ -268,6 +298,23 @@ def product_select_sql() -> str:
                photo_saved_path, photo_approved_at
         FROM products
     """
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_db() as db:
+        row = db.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+def set_setting(key: str, value: str) -> None:
+    with get_db() as db:
+        db.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, now_iso()),
+        )
+        db.commit()
 
 def task_from_row(row: sqlite3.Row) -> dict[str, Any]:
     task = dict(row)

@@ -29,6 +29,9 @@
           <button class="active" data-view="tasks" type="button">
             <span class="nav-icon">📋</span> Tasks
           </button>
+          <button data-view="ai" type="button">
+            <span class="nav-icon">🤖</span> AI Copilot
+          </button>
           <button data-view="products" type="button">
             <span class="nav-icon">📦</span> Products
           </button>
@@ -76,6 +79,42 @@
             <button id="refreshTasksButton" type="button">Refresh List</button>
           </div>
           <div id="taskList" class="task-list"></div>
+        </section>
+
+        <!-- AI Product Copilot View -->
+        <section class="view hidden" id="aiView">
+          <div class="section-head">
+            <div>
+              <h2>AI Product Copilot</h2>
+              <p class="section-desc">Generate auditable product fixes from catalog issues, online lookup evidence, and ProcureWizard context.</p>
+            </div>
+            <div class="actions-group">
+              <button id="generateIssueSuggestionsButton" class="accent-btn" type="button">Generate From Issues</button>
+              <button id="reloadAiSuggestionsButton" class="secondary" type="button">Reload Queue</button>
+            </div>
+          </div>
+          <div class="ai-toolbar">
+            <label>Suggestion status
+              <select id="aiSuggestionStatus">
+                <option value="pending">Pending review</option>
+                <option value="applied">Applied</option>
+                <option value="rejected">Rejected</option>
+                <option value="">All suggestions</option>
+              </select>
+            </label>
+            <form id="llmSettingsForm" class="llm-settings-form">
+              <label>OpenAI model
+                <input id="openaiModelInput" autocomplete="off" spellcheck="false" placeholder="gpt-4.1-mini">
+              </label>
+              <button class="secondary" type="submit">Save Model</button>
+              <p id="llmSettingsStatus" class="field-note"></p>
+            </form>
+            <div class="ai-principle">
+              <strong>Guardrail</strong>
+              <span>AI prepares field changes. Admin approval is required before catalog data changes.</span>
+            </div>
+          </div>
+          <div id="aiSuggestionList" class="ai-suggestion-list"></div>
         </section>
 
         <!-- Products Section View -->
@@ -289,6 +328,7 @@
         </div>
         <footer>
           <button id="addAliasButton" class="secondary" type="button">Add Alias</button>
+          <button id="generateProductAiButton" class="secondary" type="button">Generate AI Suggestion</button>
           <button id="mergeProductButton" class="warning" type="button">Merge Duplicate</button>
         </footer>
       </form>
@@ -311,6 +351,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=mapping-2" type="module"></script>
+    <script src="/admin.js?v=ai-copilot-1" type="module"></script>
   </body>
 </html>

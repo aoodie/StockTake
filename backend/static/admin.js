@@ -1,6 +1,8 @@
 const state = {
   authed: false,
   tasks: [],
+  aiSuggestions: [],
+  llmSettings: null,
   products: [],
   sessions: [],
   productIssues: [],
@@ -36,6 +38,13 @@ const els = {
   views: [...document.querySelectorAll(".view")],
   taskList: document.querySelector("#taskList"),
   refreshTasksButton: document.querySelector("#refreshTasksButton"),
+  aiSuggestionList: document.querySelector("#aiSuggestionList"),
+  aiSuggestionStatus: document.querySelector("#aiSuggestionStatus"),
+  generateIssueSuggestionsButton: document.querySelector("#generateIssueSuggestionsButton"),
+  reloadAiSuggestionsButton: document.querySelector("#reloadAiSuggestionsButton"),
+  llmSettingsForm: document.querySelector("#llmSettingsForm"),
+  openaiModelInput: document.querySelector("#openaiModelInput"),
+  llmSettingsStatus: document.querySelector("#llmSettingsStatus"),
   productSearchForm: document.querySelector("#productSearchForm"),
   productSearch: document.querySelector("#productSearch"),
   productList: document.querySelector("#productList"),
@@ -132,6 +141,7 @@ const els = {
   aliasBarcode: document.querySelector("#aliasBarcode"),
   aliasLabel: document.querySelector("#aliasLabel"),
   addAliasButton: document.querySelector("#addAliasButton"),
+  generateProductAiButton: document.querySelector("#generateProductAiButton"),
   mergeSourceProductId: document.querySelector("#mergeSourceProductId"),
   mergeTargetProductId: document.querySelector("#mergeTargetProductId"),
   mergeProductButton: document.querySelector("#mergeProductButton"),
@@ -235,6 +245,13 @@ function issueBadges(issues = []) {
   return issues.map((issue) => `<span class="badge warn">${escapeHtml(issue.replaceAll("_", " "))}</span>`).join("");
 }
 
+function confidenceBadge(confidence = 0, risk = "review") {
+  const value = Number(confidence || 0);
+  const label = `${Math.round(value * 100)}% · ${risk.replaceAll("_", " ")}`;
+  const tone = risk === "blocked" || risk === "low_confidence" ? "bad" : risk === "review" ? "warn" : "";
+  return `<span class="badge ${tone}">${escapeHtml(label)}</span>`;
+}
+
 function imageCandidates(suggestion = {}) {
   const candidates = Array.isArray(suggestion.image_candidates) ? [...suggestion.image_candidates] : [];
   if (suggestion.image_url && !candidates.includes(suggestion.image_url)) candidates.unshift(suggestion.image_url);
@@ -331,6 +348,161 @@ async function loadTasks() {
   }
 }
 
+function renderAiSuggestions() {
+  els.aiSuggestionList.innerHTML = state.aiSuggestions.length ? state.aiSuggestions.map((item) => {
+    const fields = item.field_values || {};
+    const reasons = item.reasons || [];
+    const sources = item.sources || [];
+    const fieldRows = Object.entries(fields).map(([key, value]) => `
+      <div class="ai-field-row">
+        <span>${escapeHtml(key.replaceAll("_", " "))}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+    `).join("");
+    return `
+      <article class="ai-card">
+        <div class="ai-card-head">
+          <div>
+            <h3>${escapeHtml(item.title || item.target_id || "AI suggestion")}</h3>
+            <p class="meta-details">
+              <span><strong>Target:</strong> ${escapeHtml(item.target_type)} · ${escapeHtml(item.target_id || "unlinked")}</span>
+              <span><strong>Barcode:</strong> ${escapeHtml(item.barcode || "None")}</span>
+              <span><strong>Updated:</strong> ${escapeHtml((item.updated_at || "").slice(0, 16).replace("T", " "))}</span>
+            </p>
+          </div>
+          ${statusBadge(item.status)}
+          ${confidenceBadge(item.confidence, item.risk_level)}
+        </div>
+        <div class="ai-card-body">
+          <div class="ai-field-grid">
+            ${fieldRows || `<p class="meta">No safe field changes found. Keep for manual review.</p>`}
+          </div>
+          <div class="ai-evidence">
+            ${reasons.length ? `<h4>Why</h4>${reasons.map((reason) => `<p>${escapeHtml(reason)}</p>`).join("")}` : ""}
+            ${sources.length ? `<h4>Sources</h4>${sources.map((source) => (
+              `<a href="${escapeHtml(source.url || source)}" target="_blank" rel="noreferrer">${escapeHtml(source.name || source.url || source)}</a>`
+            )).join("")}` : ""}
+            ${item.error ? `<p class="error" style="text-align:left;">${escapeHtml(item.error)}</p>` : ""}
+          </div>
+        </div>
+        <div class="ai-actions">
+          <button class="secondary" data-action="open-ai-target" data-target-type="${escapeHtml(item.target_type)}" data-target-id="${escapeHtml(item.target_id || "")}" type="button">Open Target</button>
+          <button class="secondary warning" data-action="reject-ai" data-id="${escapeHtml(item.id)}" type="button" ${item.status === "pending" ? "" : "disabled"}>Reject</button>
+          <button class="primary-btn" data-action="apply-ai" data-id="${escapeHtml(item.id)}" type="button" ${item.status === "pending" && Object.keys(fields).length ? "" : "disabled"}>Apply Fields</button>
+        </div>
+      </article>
+    `;
+  }).join("") : `<p class="meta" style="text-align:center; padding:24px;">No AI suggestions in this queue.</p>`;
+}
+
+async function loadAiSuggestions() {
+  try {
+    const status = els.aiSuggestionStatus.value;
+    const data = await api(`/admin/api/ai-suggestions?status=${encodeURIComponent(status)}&limit=50`);
+    state.aiSuggestions = data.suggestions || [];
+    renderAiSuggestions();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function loadLlmSettings() {
+  try {
+    const data = await api("/admin/api/settings/llm");
+    state.llmSettings = data;
+    els.openaiModelInput.value = data.openai_model || "";
+    els.llmSettingsStatus.textContent = `${data.has_openai_key ? "API key configured" : "No API key"} · Env default: ${data.env_default || "none"}`;
+    els.llmSettingsStatus.classList.toggle("error", !data.has_openai_key);
+  } catch (err) {
+    els.llmSettingsStatus.textContent = err.message;
+    els.llmSettingsStatus.classList.add("error");
+  }
+}
+
+async function saveLlmSettings() {
+  const openai_model = els.openaiModelInput.value.trim();
+  if (!openai_model) {
+    showToast("OpenAI model is required.", "error");
+    return;
+  }
+  try {
+    const data = await api("/admin/api/settings/llm", {
+      method: "PATCH",
+      body: JSON.stringify({ openai_model })
+    });
+    state.llmSettings = data;
+    els.llmSettingsStatus.textContent = `Saved. New AI requests will use ${data.openai_model}.`;
+    els.llmSettingsStatus.classList.remove("error");
+    showToast(`OpenAI model set to ${data.openai_model}`);
+  } catch (err) {
+    els.llmSettingsStatus.textContent = err.message;
+    els.llmSettingsStatus.classList.add("error");
+    showToast(err.message, "error");
+  }
+}
+
+async function generateIssueSuggestions() {
+  els.generateIssueSuggestionsButton.disabled = true;
+  try {
+    const data = await api("/admin/api/ai-suggestions/generate-issues", {
+      method: "POST",
+      body: JSON.stringify({ limit: 12 })
+    });
+    showToast(`Generated ${data.total || 0} AI suggestions`);
+    await loadAiSuggestions();
+    await loadDashboard();
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    els.generateIssueSuggestionsButton.disabled = false;
+  }
+}
+
+async function generateSuggestionForProduct(productId, force = false) {
+  try {
+    const data = await api("/admin/api/ai-suggestions/generate", {
+      method: "POST",
+      body: JSON.stringify({ product_id: productId, force })
+    });
+    showToast(`AI suggestion ready: ${data.suggestion?.title || productId}`);
+    await loadAiSuggestions();
+    await loadDashboard();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function applyAiSuggestion(id) {
+  const item = state.aiSuggestions.find((suggestion) => suggestion.id === id);
+  if (!item) return;
+  if (!(await confirmDialog("Apply AI fields", `Apply suggested fields to ${item.title || item.target_id}?`, "Apply"))) return;
+  try {
+    const result = await api(`/admin/api/ai-suggestions/${encodeURIComponent(id)}/apply`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    showToast(`Applied ${result.fields?.length || 0} fields`);
+    await hydrate();
+    await loadAiSuggestions();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+async function rejectAiSuggestion(id) {
+  try {
+    await api(`/admin/api/ai-suggestions/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: "{}"
+    });
+    showToast("AI suggestion rejected");
+    await loadAiSuggestions();
+    await loadDashboard();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
 async function loadProducts(search = "", append = false) {
   try {
     if (!append) {
@@ -409,7 +581,10 @@ async function loadProductIssues() {
             </p>
             <p class="meta-details">${issueBadges(row.issues || [])}</p>
           </div>
-          <button class="primary-btn" data-action="detail-product" data-id="${escapeHtml(product.id)}" type="button">Open Detail</button>
+          <div style="display:flex; gap:8px;">
+            <button class="secondary" data-action="generate-ai-product" data-id="${escapeHtml(product.id)}" type="button">Generate AI</button>
+            <button class="primary-btn" data-action="detail-product" data-id="${escapeHtml(product.id)}" type="button">Open Detail</button>
+          </div>
         </article>
       `;
     }).join("") : `<p class="meta" style="text-align:center; padding:24px;">No product issues found.</p>`;
@@ -1019,6 +1194,7 @@ function bindEvents() {
         loadMappingRecent();
         setTimeout(() => els.mappingBarcodeInput.focus(), 80);
       }
+      if (button.dataset.view === "ai") loadAiSuggestions();
       if (button.dataset.view === "export") loadExportReview();
     });
   });
@@ -1026,6 +1202,29 @@ function bindEvents() {
   els.refreshTasksButton.addEventListener("click", async () => {
     await loadTasks();
     showToast("Tasks list refreshed");
+  });
+
+  els.generateIssueSuggestionsButton.addEventListener("click", generateIssueSuggestions);
+  els.reloadAiSuggestionsButton.addEventListener("click", loadAiSuggestions);
+  els.aiSuggestionStatus.addEventListener("change", loadAiSuggestions);
+  els.llmSettingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveLlmSettings();
+  });
+  els.aiSuggestionList.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.dataset.action === "apply-ai") await applyAiSuggestion(button.dataset.id);
+    if (button.dataset.action === "reject-ai") await rejectAiSuggestion(button.dataset.id);
+    if (button.dataset.action === "open-ai-target") {
+      if (button.dataset.targetType === "product" && button.dataset.targetId) {
+        await openProductDetail(button.dataset.targetId);
+      }
+      if (button.dataset.targetType === "task") {
+        const task = state.tasks.find((item) => item.id === button.dataset.targetId);
+        if (task) showTask(task);
+      }
+    }
   });
 
   // Task dialog / list events
@@ -1190,8 +1389,9 @@ function bindEvents() {
 
   els.productIssueList.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
-    if (!button || button.dataset.action !== "detail-product") return;
-    await openProductDetail(button.dataset.id);
+    if (!button) return;
+    if (button.dataset.action === "detail-product") await openProductDetail(button.dataset.id);
+    if (button.dataset.action === "generate-ai-product") await generateSuggestionForProduct(button.dataset.id, true);
   });
 
   els.mappingSearchForm.addEventListener("submit", async (event) => {
@@ -1256,6 +1456,10 @@ function bindEvents() {
     event.preventDefault();
   });
   els.addAliasButton.addEventListener("click", addSelectedProductAlias);
+  els.generateProductAiButton.addEventListener("click", async () => {
+    const product = state.selectedProductDetail;
+    if (product) await generateSuggestionForProduct(product.id, true);
+  });
 
   els.productAliasList.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
@@ -1405,7 +1609,7 @@ function bindEvents() {
 
 async function hydrate() {
   await loadDashboard();
-  await Promise.all([loadTasks(), loadProducts(), loadSessions(), loadMappingProducts()]);
+  await Promise.all([loadTasks(), loadProducts(), loadSessions(), loadMappingProducts(), loadAiSuggestions(), loadLlmSettings()]);
   if (els.exportSession.value) await loadExportReview();
   await loadProcureWizardStatus();
 }

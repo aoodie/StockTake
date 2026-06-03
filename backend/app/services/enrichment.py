@@ -3,12 +3,16 @@ import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Any
 import httpx
-from ..database import get_db, now_iso
+from ..database import get_db, get_setting, now_iso
 
 IMAGE_DIR = Path(__file__).resolve().parents[2] / "data" / "product-images"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+def openai_model() -> str:
+    return get_setting("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
 
 def parse_open_food_facts(product: dict, barcode: str) -> dict:
     name = product.get("product_name") or product.get("generic_name") or f"Product {barcode}"
@@ -71,7 +75,7 @@ def llm_refine_product(suggestion: dict) -> dict:
     # Map model name if user is using a chat model, standard completions endpoint is /v1/chat/completions
     url = "https://api.openai.com/v1/chat/completions"
     payload = {
-        "model": OPENAI_MODEL,
+        "model": openai_model(),
         "messages": [
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(suggestion, separators=(",", ":"))},
@@ -93,7 +97,7 @@ def llm_refine_product(suggestion: dict) -> dict:
             if response.status_code != 200:
                 fallback_url = "https://api.openai.com/v1/responses"
                 fallback_payload = {
-                    "model": OPENAI_MODEL,
+                    "model": openai_model(),
                     "input": [
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": json.dumps(suggestion, separators=(",", ":"))},
@@ -129,6 +133,169 @@ def llm_refine_product(suggestion: dict) -> dict:
             
     refined = extract_json_object(output)
     return {**suggestion, **{k: v for k, v in refined.items() if v not in (None, "")}}
+
+def _compact_sources(*items: Any) -> list[dict[str, str]]:
+    sources: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not item:
+            continue
+        if isinstance(item, str):
+            url = item.strip()
+            if url and url not in seen:
+                sources.append({"name": urlparse(url).netloc or "Source", "url": url})
+                seen.add(url)
+            continue
+        if isinstance(item, dict):
+            for url in item.get("source_urls") or []:
+                clean = str(url or "").strip()
+                if clean and clean not in seen:
+                    sources.append({"name": item.get("source_name") or urlparse(clean).netloc or "Source", "url": clean})
+                    seen.add(clean)
+    return sources[:8]
+
+def _clean_field_values(values: dict[str, Any]) -> dict[str, str]:
+    allowed = {"name", "bin", "category", "size", "unit", "photo_url", "notes", "draft_status"}
+    cleaned: dict[str, str] = {}
+    for key, value in values.items():
+        if key not in allowed or value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            cleaned[key] = text
+    return cleaned
+
+def _llm_refine_ai_suggestion(evidence: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    if not OPENAI_API_KEY:
+        return draft
+    prompt = (
+        "You are an admin-side product data copilot for a bar stocktake system. "
+        "Return compact JSON only. Use evidence, do not invent unsupported facts. "
+        "Suggest only fields that improve an inventory product record. "
+        "Schema: title, field_values, confidence, risk_level, reasons, sources. "
+        "risk_level must be one of auto_safe, review, low_confidence, blocked. "
+        "field_values may contain name, bin, category, size, unit, photo_url, notes, draft_status."
+    )
+    payload = {
+        "model": openai_model(),
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": json.dumps({"evidence": evidence, "draft": draft}, separators=(",", ":"))},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        with httpx.Client(timeout=25) as client:
+            response = client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0].get("message", {}).get("content", "")
+    except Exception as exc:
+        return {**draft, "error": str(exc)}
+    refined = extract_json_object(content)
+    if not refined:
+        return draft
+    field_values = _clean_field_values(refined.get("field_values") or draft.get("field_values") or {})
+    reasons = refined.get("reasons") if isinstance(refined.get("reasons"), list) else draft.get("reasons", [])
+    sources = refined.get("sources") if isinstance(refined.get("sources"), list) else draft.get("sources", [])
+    confidence = refined.get("confidence", draft.get("confidence", 0.3))
+    try:
+        confidence = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        confidence = draft.get("confidence", 0.3)
+    risk = refined.get("risk_level") or draft.get("risk_level") or "review"
+    if risk not in {"auto_safe", "review", "low_confidence", "blocked"}:
+        risk = "review"
+    return {
+        **draft,
+        "title": str(refined.get("title") or draft.get("title") or "AI product suggestion").strip(),
+        "field_values": field_values,
+        "confidence": confidence,
+        "risk_level": risk,
+        "reasons": [str(reason) for reason in reasons if str(reason or "").strip()][:8],
+        "sources": sources[:8] if isinstance(sources, list) else draft.get("sources", []),
+    }
+
+def build_ai_product_suggestion(evidence: dict[str, Any]) -> dict[str, Any]:
+    product = evidence.get("product") or {}
+    task = evidence.get("task") or {}
+    online = evidence.get("online") or {}
+    procurewizard = evidence.get("procurewizard") or {}
+    issues = evidence.get("issues") or []
+
+    field_values: dict[str, str] = {}
+    current_name = str(product.get("name") or task.get("current_name") or "").strip()
+    online_name = str(online.get("name") or "").strip()
+    weak_current_name = (
+        not current_name
+        or current_name.lower().startswith("draft ")
+        or current_name.lower().startswith("product ")
+    )
+    if online_name and weak_current_name:
+        field_values["name"] = online_name
+    if not str(product.get("bin") or "").strip() and procurewizard.get("bin_number"):
+        field_values["bin"] = str(procurewizard["bin_number"]).strip()
+    if not str(product.get("category") or "").strip() and (online.get("category") or procurewizard.get("category")):
+        field_values["category"] = str(online.get("category") or procurewizard.get("category")).strip()
+    if not str(product.get("size") or "").strip() and (online.get("size") or procurewizard.get("pack_size")):
+        field_values["size"] = str(online.get("size") or procurewizard.get("pack_size")).strip()
+    if not str(product.get("unit") or "").strip() or product.get("unit") == "each":
+        if online.get("unit") and online.get("unit") != "each":
+            field_values["unit"] = str(online["unit"]).strip()
+    if not str(product.get("photo_url") or "").strip() and (online.get("image_url") or ""):
+        field_values["photo_url"] = str(online["image_url"]).strip()
+    if product.get("draft_status") == "draft" and field_values.get("name"):
+        field_values["draft_status"] = "confirmed"
+
+    note_parts = []
+    if online.get("brand"):
+        note_parts.append(f"Brand: {online['brand']}")
+    if online.get("source_name"):
+        note_parts.append(f"AI evidence source: {online['source_name']}")
+    if online.get("confidence"):
+        note_parts.append(f"Lookup confidence: {online['confidence']}")
+    if note_parts and not str(product.get("notes") or "").strip():
+        field_values["notes"] = "\n".join(note_parts)
+
+    reasons = []
+    if issues:
+        reasons.append(f"Product has open issues: {', '.join(str(issue).replace('_', ' ') for issue in issues[:5])}.")
+    if online_name:
+        reasons.append("Online product lookup supplied a candidate identity.")
+    if procurewizard:
+        reasons.append("Active ProcureWizard row supplies local BIN/category/pack-size evidence.")
+    if field_values.get("photo_url"):
+        reasons.append("A real online product image candidate is available for approval.")
+    if not reasons:
+        reasons.append("No strong automated repair was found; keep this for manual review.")
+
+    confidence = float(online.get("confidence") or 0.35)
+    if procurewizard:
+        confidence = max(confidence, 0.62)
+    if not field_values:
+        confidence = min(confidence, 0.25)
+    risk_level = "review"
+    if confidence < 0.45:
+        risk_level = "low_confidence"
+    if not field_values:
+        risk_level = "blocked"
+
+    draft = {
+        "title": field_values.get("name") or current_name or f"Product {evidence.get('barcode') or ''}".strip(),
+        "field_values": _clean_field_values(field_values),
+        "confidence": max(0.0, min(1.0, confidence)),
+        "risk_level": risk_level,
+        "reasons": reasons[:8],
+        "sources": _compact_sources(online, *(online.get("source_urls") or [])),
+        "evidence": evidence,
+    }
+    return _llm_refine_ai_suggestion(evidence, draft)
 
 def fetch_product_suggestion(barcode: str) -> dict:
     # 1. Check SQLite lookup cache first

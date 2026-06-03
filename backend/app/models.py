@@ -96,3 +96,21 @@ class ProcureWizardImportRequest(BaseModel):
 
 class ProcureWizardLinkRequest(BaseModel):
     product_id: str | None = None
+
+class AiSuggestionGenerateRequest(BaseModel):
+    product_id: str | None = None
+    task_id: str | None = None
+    barcode: str | None = None
+    force: bool = False
+
+class AiSuggestionIssueBatchRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=50)
+    force: bool = False
+
+class AiSuggestionApplyRequest(BaseModel):
+    fields: list[
+        Literal["name", "bin", "category", "size", "unit", "photo_url", "notes", "draft_status"]
+    ] | None = None
+
+class LlmSettingsRequest(BaseModel):
+    openai_model: str = Field(min_length=1, max_length=120)
