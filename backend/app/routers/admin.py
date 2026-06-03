@@ -49,6 +49,53 @@ def audit_product_change(
         ),
     )
 
+def audit_barcode_mapping(
+    db: sqlite3.Connection,
+    barcode: str,
+    product_id: str,
+    product_name: str,
+    action: str,
+    label: str = "",
+    source: str = "admin",
+    details: dict[str, Any] | None = None,
+) -> int:
+    cursor = db.execute(
+        """
+        INSERT INTO barcode_mapping_audit (
+            barcode, product_id, product_name, action, label, source, details_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            barcode,
+            product_id,
+            product_name,
+            action,
+            label,
+            source or "admin",
+            json.dumps(details or {}, separators=(",", ":")),
+            now_iso(),
+        ),
+    )
+    return int(cursor.lastrowid)
+
+def barcode_lookup_values(value: str) -> list[str]:
+    code = normalize_identifier(value)
+    if not code:
+        return []
+    values = [code]
+    if code.isdigit():
+        stripped = code.lstrip("0") or "0"
+        values.append(stripped)
+        values.extend([
+            stripped.zfill(8),
+            stripped.zfill(12),
+            stripped.zfill(13),
+        ])
+        if len(code) in {8, 12, 13}:
+            values.append(code.lstrip("0") or code)
+    return list(dict.fromkeys(values))
+
 def product_snapshot(db: sqlite3.Connection, product_id: str) -> dict[str, Any] | None:
     row = db.execute(f"{product_select_sql()} WHERE id = ?", (product_id,)).fetchone()
     if not row:
@@ -72,6 +119,12 @@ def ensure_primary_barcode_alias(db: sqlite3.Connection, product_id: str, barcod
     barcode = normalize_identifier(barcode)
     if not barcode:
         return
+    owner = db.execute(
+        "SELECT product_id FROM product_barcodes WHERE barcode = ?",
+        (barcode,),
+    ).fetchone()
+    if owner and owner["product_id"] != product_id:
+        raise HTTPException(status_code=400, detail=f"Barcode {barcode} already belongs to another product.")
     if current and current != barcode:
         db.execute(
             "UPDATE product_barcodes SET is_primary = 0, label = COALESCE(label, 'Alias barcode') WHERE product_id = ?",
@@ -82,9 +135,9 @@ def ensure_primary_barcode_alias(db: sqlite3.Connection, product_id: str, barcod
         INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
         VALUES (?, ?, 'Primary barcode', 1, ?)
         ON CONFLICT(barcode) DO UPDATE SET
-            product_id = excluded.product_id,
             label = excluded.label,
             is_primary = 1
+        WHERE product_barcodes.product_id = excluded.product_id
         """,
         (barcode, product_id, now_iso()),
     )
@@ -176,6 +229,11 @@ def mapping_product(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     product["procurewizard"] = dict(procurewizard) if procurewizard else None
     product["needs_real_barcode"] = product["real_barcode_count"] == 0
     return product
+
+def mapping_audit_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["details"] = json.loads(item.pop("details_json") or "{}")
+    return item
 
 @router.post("/admin/api/login")
 def admin_login(request: Request, payload: LoginRequest, response: Response) -> dict:
@@ -367,16 +425,20 @@ def admin_barcode_mapping_lookup(
     require_admin(_)
     init_db()
     code = normalize_identifier(barcode)
+    codes = barcode_lookup_values(code)
+    if not codes:
+        return {"barcode": code, "owner": None}
+    placeholders = ",".join("?" for _ in codes)
     with get_db() as db:
         row = db.execute(
-            """
+            f"""
             SELECT p.id, p.name, p.barcode, pb.label
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
-            WHERE pb.barcode = ?
+            WHERE pb.barcode IN ({placeholders})
             LIMIT 1
             """,
-            (code,),
+            codes,
         ).fetchone()
     return {"barcode": code, "owner": dict(row) if row else None}
 
@@ -430,13 +492,17 @@ def admin_create_product(
     require_admin(_)
     init_db()
     barcode = normalize_identifier(request.barcode)
+    codes = barcode_lookup_values(barcode)
+    if not codes:
+        raise HTTPException(status_code=400, detail="Barcode is required")
+    placeholders = ",".join("?" for _ in codes)
     product_id = f"product-{barcode}"
     current = now_iso()
     with get_db() as db:
-        existing = db.execute("SELECT id FROM products WHERE barcode = ?", (barcode,)).fetchone()
+        existing = db.execute(f"SELECT id FROM products WHERE barcode IN ({placeholders})", codes).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail=f"Product with barcode {barcode} already exists.")
-        alias_owner = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (barcode,)).fetchone()
+        alias_owner = db.execute(f"SELECT product_id FROM product_barcodes WHERE barcode IN ({placeholders})", codes).fetchone()
         if alias_owner:
             raise HTTPException(status_code=400, detail=f"Barcode {barcode} already belongs to another product.")
         db.execute(
@@ -463,8 +529,18 @@ def admin_create_product(
         )
         ensure_primary_barcode_alias(db, product_id, barcode)
         audit_product_change(db, product_id, "create_product", None, product_snapshot(db, product_id))
+        mapping_audit_id = audit_barcode_mapping(
+            db,
+            barcode,
+            product_id,
+            request.name,
+            "create_product",
+            "Primary barcode",
+            request.source_screen,
+            {"draft_status": request.draft_status},
+        )
         db.commit()
-    return {"product_id": product_id, "status": "created"}
+    return {"product_id": product_id, "status": "created", "mapping_audit_id": mapping_audit_id}
 
 @router.get("/admin/api/products/{product_id}")
 def admin_product_detail(
@@ -514,28 +590,57 @@ def admin_add_product_barcode(
     require_admin(_)
     init_db()
     barcode = normalize_identifier(request.barcode)
+    codes = barcode_lookup_values(barcode)
+    if not codes:
+        raise HTTPException(status_code=400, detail="Barcode is required")
+    placeholders = ",".join("?" for _ in codes)
     if request.is_primary:
         raise HTTPException(status_code=400, detail="Primary barcode is locked. Add this code as an alias instead.")
     with get_db() as db:
         before = product_snapshot(db, product_id)
         if not before:
             raise HTTPException(status_code=404, detail="Product not found")
-        owner = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (barcode,)).fetchone()
+        owner = db.execute(
+            f"SELECT barcode, product_id, is_primary FROM product_barcodes WHERE barcode IN ({placeholders})",
+            codes,
+        ).fetchone()
         if owner and owner["product_id"] != product_id:
             raise HTTPException(status_code=400, detail=f"Barcode {barcode} already belongs to another product.")
-        db.execute(
+        if owner and owner["is_primary"]:
+            raise HTTPException(status_code=400, detail="This barcode is already the product's locked primary barcode.")
+        if owner and owner["product_id"] == product_id:
+            return {
+                "status": "already_mapped",
+                "product_id": product_id,
+                "barcode": owner["barcode"],
+                "mapping_audit_id": None,
+            }
+        result = db.execute(
             """
             INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(barcode) DO UPDATE SET
-                label = excluded.label,
-                is_primary = excluded.is_primary
+            ON CONFLICT(barcode) DO NOTHING
             """,
             (barcode, product_id, request.label, 1 if request.is_primary else 0, now_iso()),
         )
+        if result.rowcount == 0:
+            owner = db.execute("SELECT product_id, is_primary FROM product_barcodes WHERE barcode = ?", (barcode,)).fetchone()
+            if not owner or owner["product_id"] != product_id or owner["is_primary"]:
+                raise HTTPException(status_code=409, detail=f"Barcode {barcode} was mapped by another device.")
+            return {"status": "already_mapped", "product_id": product_id, "barcode": barcode, "mapping_audit_id": None}
         audit_product_change(db, product_id, "add_barcode", before, product_snapshot(db, product_id))
+        mapping_audit_id = audit_barcode_mapping(
+            db,
+            barcode,
+            product_id,
+            before.get("name") or product_id,
+            "add_alias",
+            request.label,
+            request.source_screen,
+            {"is_primary": request.is_primary},
+        )
         db.commit()
-    return {"status": "saved", "product_id": product_id, "barcode": barcode}
+    return {"status": "saved", "product_id": product_id, "barcode": barcode, "mapping_audit_id": mapping_audit_id}
 
 @router.delete("/admin/api/products/{product_id}/barcodes/{barcode}")
 def admin_delete_product_barcode(
@@ -745,20 +850,118 @@ def admin_lookup_product(
     barcode = normalize_identifier(barcode)
     if not barcode:
         raise HTTPException(status_code=400, detail="Barcode is required")
+    codes = barcode_lookup_values(barcode)
+    placeholders = ",".join("?" for _ in codes)
     with get_db() as db:
         owner = db.execute(
-            """
-            SELECT p.id, p.name, p.barcode
+            f"""
+            SELECT p.id, p.barcode, p.bin, p.name, p.category, p.size, p.unit, p.photo_url, p.notes,
+                   p.draft_status, p.product_updated_at, p.photo_source_url, p.photo_source_name,
+                   p.photo_saved_path, p.photo_approved_at
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
-            WHERE pb.barcode = ?
+            WHERE pb.barcode IN ({placeholders})
+            LIMIT 1
             """,
-            (barcode,),
+            codes,
         ).fetchone()
         if owner:
-            return {"barcode": barcode, "exists": True, "product": dict(owner), "suggested": {}}
+            return {"barcode": barcode, "exists": True, "product": mapping_product(db, owner), "suggested": {}}
     suggestion = fetch_product_suggestion(barcode)
     return {"barcode": barcode, "exists": False, "suggested": suggestion}
+
+@router.get("/admin/api/barcode-mapping/recent")
+def admin_recent_barcode_mappings(
+    limit: int = 20,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    limit = max(1, min(limit, 100))
+    with get_db() as db:
+        rows = db.execute(
+            """
+            SELECT bma.*, p.name AS current_product_name, p.draft_status
+            FROM barcode_mapping_audit bma
+            LEFT JOIN products p ON p.id = bma.product_id
+            ORDER BY bma.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return {"mappings": [mapping_audit_row(row) for row in rows]}
+
+@router.post("/admin/api/barcode-mapping/recent/{audit_id}/undo")
+def admin_undo_barcode_mapping(
+    audit_id: int,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    current = now_iso()
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM barcode_mapping_audit WHERE id = ?",
+            (audit_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Mapping audit entry not found")
+        if row["undone_at"]:
+            raise HTTPException(status_code=400, detail="This mapping has already been undone.")
+
+        product_id = row["product_id"]
+        barcode = normalize_identifier(row["barcode"])
+        before = product_snapshot(db, product_id)
+        if row["action"] == "add_alias":
+            alias = db.execute(
+                "SELECT is_primary FROM product_barcodes WHERE product_id = ? AND barcode = ?",
+                (product_id, barcode),
+            ).fetchone()
+            if not alias:
+                raise HTTPException(status_code=404, detail="Barcode alias is no longer present.")
+            if alias["is_primary"]:
+                raise HTTPException(status_code=400, detail="Primary barcode cannot be undone from mapping history.")
+            db.execute("DELETE FROM product_barcodes WHERE product_id = ? AND barcode = ?", (product_id, barcode))
+            audit_product_change(db, product_id, "undo_barcode_mapping", before, product_snapshot(db, product_id))
+        elif row["action"] == "create_product":
+            if not before:
+                raise HTTPException(status_code=404, detail="Product is already missing.")
+            if before.get("draft_status") != "draft":
+                raise HTTPException(status_code=400, detail="Only draft products can be undone from mapping history.")
+            if before.get("product_updated_at") and before["product_updated_at"] > row["created_at"]:
+                raise HTTPException(status_code=400, detail="Cannot undo product creation after later catalog edits.")
+            alias_count = db.execute(
+                "SELECT COUNT(*) AS c FROM product_barcodes WHERE product_id = ?",
+                (product_id,),
+            ).fetchone()
+            if alias_count and alias_count["c"] > 1:
+                raise HTTPException(status_code=400, detail="Cannot undo product creation after extra barcodes were added.")
+            changed_after = db.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM product_audit
+                WHERE product_id = ?
+                  AND action != 'create_product'
+                  AND created_at > ?
+                """,
+                (product_id, row["created_at"]),
+            ).fetchone()
+            if changed_after and changed_after["c"]:
+                raise HTTPException(status_code=400, detail="Cannot undo product creation after later catalog edits.")
+            count_row = db.execute(
+                "SELECT COUNT(*) AS c FROM stocktake_lines WHERE product_id = ?",
+                (product_id,),
+            ).fetchone()
+            if count_row and count_row["c"]:
+                raise HTTPException(status_code=400, detail="Cannot undo product creation after stocktake counts exist.")
+            db.execute("DELETE FROM products WHERE id = ?", (product_id,))
+            audit_product_change(db, product_id, "undo_created_product", before, None)
+        else:
+            raise HTTPException(status_code=400, detail="This mapping action cannot be undone.")
+
+        db.execute("UPDATE barcode_mapping_audit SET undone_at = ? WHERE id = ?", (current, audit_id))
+        db.commit()
+    return {"status": "undone", "audit_id": audit_id, "product_id": product_id, "barcode": barcode}
 
 @router.post("/admin/api/tasks/{task_id}/approve")
 def admin_approve_task(
@@ -775,6 +978,16 @@ def admin_approve_task(
         barcode = task["barcode"]
         product_id = task["draft_product_id"] or f"product-{barcode}"
         before = product_snapshot(db, product_id)
+        codes = barcode_lookup_values(barcode)
+        if not codes:
+            raise HTTPException(status_code=400, detail="Task barcode is required")
+        placeholders = ",".join("?" for _ in codes)
+        owner = db.execute(
+            f"SELECT barcode, product_id FROM product_barcodes WHERE barcode IN ({placeholders}) LIMIT 1",
+            codes,
+        ).fetchone()
+        if owner and owner["product_id"] != product_id:
+            raise HTTPException(status_code=400, detail=f"Barcode {barcode} already belongs to another product.")
         saved_photo = save_product_image(product_id, request.photo_url or "")
         photo_url = saved_photo or request.photo_url or ""
         current = now_iso()

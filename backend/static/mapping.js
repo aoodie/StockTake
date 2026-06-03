@@ -5,7 +5,7 @@ import {
   ZXING_FAST_FORMATS,
   decodedBarcodeText,
   normalizeBarcode
-} from "./frontend-utils.js?v=phone-mapping-1";
+} from "./frontend-utils.js?v=phone-mapping-3";
 
 const els = {
   loginView: document.querySelector("#mappingLoginView"),
@@ -20,6 +20,9 @@ const els = {
   manualForm: document.querySelector("#mappingManualForm"),
   manualBarcode: document.querySelector("#mappingManualBarcode"),
   resultCard: document.querySelector("#mappingResultCard"),
+  suggestedPanel: document.querySelector("#mappingSuggestedPanel"),
+  suggestedResults: document.querySelector("#mappingSuggestedResults"),
+  openSearch: document.querySelector("#mappingOpenSearch"),
   actions: document.querySelector("#mappingActions"),
   showExisting: document.querySelector("#mappingShowExisting"),
   showCreate: document.querySelector("#mappingShowCreate"),
@@ -37,7 +40,8 @@ const els = {
   createSize: document.querySelector("#mappingCreateSize"),
   createUnit: document.querySelector("#mappingCreateUnit"),
   createPhoto: document.querySelector("#mappingCreatePhoto"),
-  createNotes: document.querySelector("#mappingCreateNotes")
+  createNotes: document.querySelector("#mappingCreateNotes"),
+  recovery: document.querySelector("#mappingRecovery")
 };
 
 const state = {
@@ -50,6 +54,9 @@ const state = {
   lastScanAt: 0,
   currentBarcode: "",
   currentSuggestion: {},
+  scanLocked: false,
+  lastAction: null,
+  saveInFlight: false,
   searchTimer: null
 };
 
@@ -90,6 +97,10 @@ function setStatus(message, variant = "") {
   els.cameraPanel.classList.toggle("mapping-camera-error", variant === "error");
 }
 
+function vibrate(pattern) {
+  navigator.vibrate?.(pattern);
+}
+
 function showResult({ kicker, title, message, product, suggestion, variant = "" }) {
   const photo = product?.photo_url || suggestion?.image_url || "";
   els.resultCard.className = `mapping-card mapping-result ${variant}`;
@@ -108,6 +119,15 @@ function showResult({ kicker, title, message, product, suggestion, variant = "" 
 function showPanels(panel = "") {
   els.existingPanel.classList.toggle("hidden", panel !== "existing");
   els.createPanel.classList.toggle("hidden", panel !== "create");
+}
+
+function openCreatePanel() {
+  showPanels("create");
+  els.createName.focus();
+}
+
+function showSuggestedMatches(show) {
+  els.suggestedPanel.classList.toggle("hidden", !show);
 }
 
 function setReadyForMapping(ready) {
@@ -133,14 +153,17 @@ function prefillCreateForm(suggestion = {}, barcode = state.currentBarcode) {
 async function lookupBarcode(rawBarcode) {
   const barcode = normalizeBarcode(rawBarcode);
   if (!barcode || state.scanInFlight) return;
+  if (state.scanLocked) return;
   const now = Date.now();
   if (barcode === state.lastBarcode && now - state.lastScanAt < SCAN_DEBOUNCE_MS) return;
   state.lastBarcode = barcode;
   state.lastScanAt = now;
   state.scanInFlight = true;
   state.currentBarcode = barcode;
+  els.recovery.classList.add("hidden");
   setStatus(`Checking ${barcode}...`);
   showPanels("");
+  showSuggestedMatches(false);
   setReadyForMapping(false);
   try {
     const result = await api(`/admin/api/products/lookup/${encodeURIComponent(barcode)}`);
@@ -154,8 +177,10 @@ async function lookupBarcode(rawBarcode) {
         variant: "mapped"
       });
       setStatus("Already mapped", "ok");
+      vibrate(35);
       return;
     }
+    state.scanLocked = true;
     prefillCreateForm(state.currentSuggestion, barcode);
     showResult({
       kicker: `New barcode ${barcode}`,
@@ -168,56 +193,94 @@ async function lookupBarcode(rawBarcode) {
     });
     setReadyForMapping(true);
     setStatus("Ready to map", "ok");
+    vibrate([30, 40, 30]);
     const query = state.currentSuggestion.name || barcode;
     els.productSearch.value = query;
+    await searchProducts(query, {
+      target: els.suggestedResults,
+      limit: 5,
+      onlyMissing: true,
+      supplementAll: true,
+      emptyMessage: "No close matches yet. Search all products or create a draft."
+    });
+    showSuggestedMatches(true);
+    showPanels("existing");
     await searchProducts(query);
   } catch (err) {
     showResult({
       kicker: `Barcode ${barcode}`,
       title: "Lookup failed",
-      message: err.message,
+      message: `${err.message}. Retry, type another barcode, or keep scanning.`,
       variant: "error"
     });
     setStatus("Lookup failed", "error");
+    vibrate([80, 40, 80]);
   } finally {
     state.scanInFlight = false;
   }
 }
 
-async function searchProducts(search = els.productSearch.value.trim()) {
+async function searchProducts(search = els.productSearch.value.trim(), options = {}) {
+  const target = options.target || els.productResults;
+  const limit = options.limit || 20;
+  const onlyMissing = options.onlyMissing ? "true" : "false";
   const params = new URLSearchParams({
     search,
-    only_missing: "false",
-    limit: "20",
+    only_missing: onlyMissing,
+    limit: String(limit),
     offset: "0"
   });
   try {
     const data = await api(`/admin/api/barcode-mapping/products?${params}`);
-    renderProducts(data.products || []);
+    let products = data.products || [];
+    if (options.supplementAll && products.length < limit) {
+      const allParams = new URLSearchParams({
+        search,
+        only_missing: "false",
+        limit: String(limit),
+        offset: "0"
+      });
+      const allData = await api(`/admin/api/barcode-mapping/products?${allParams}`);
+      const seen = new Set(products.map((product) => product.id));
+      products = [
+        ...products,
+        ...(allData.products || []).filter((product) => !seen.has(product.id))
+      ].slice(0, limit);
+    }
+    renderProducts(products, target, options.emptyMessage);
+    return products;
   } catch (err) {
-    els.productResults.innerHTML = `<p class="mapping-error">${escapeHtml(err.message)}</p>`;
+    target.innerHTML = `<p class="mapping-error">${escapeHtml(err.message)}</p>`;
+    return [];
   }
 }
 
-function renderProducts(products) {
-  els.productResults.innerHTML = products.length ? products.map((product) => `
+function renderProducts(products, target = els.productResults, emptyMessage = "No products found. Try another search or add a new product.") {
+  target.innerHTML = products.length ? products.map((product) => `
     <button class="mapping-product-choice" type="button" data-product-id="${escapeHtml(product.id)}">
       ${product.photo_url ? `<img src="${escapeHtml(product.photo_url)}" alt="">` : `<span></span>`}
       <strong>${escapeHtml(product.name)}</strong>
-      <small>BIN ${escapeHtml(product.bin || product.procurewizard?.bin_number || "-")} | PID ${escapeHtml(product.procurewizard?.pid || "-")} | ${escapeHtml(product.size || "-")}</small>
+      <small>BIN ${escapeHtml(product.bin || product.procurewizard?.bin_number || "-")} | PID ${escapeHtml(product.procurewizard?.pid || "-")} | ${escapeHtml(product.size || product.procurewizard?.pack_size || "-")}</small>
     </button>
-  `).join("") : `<p>No products found. Try another search or add a new product.</p>`;
+  `).join("") : `
+    <div class="mapping-no-results">
+      <p>${escapeHtml(emptyMessage)}</p>
+      <button class="mapping-create-draft-cta" type="button">No match - create draft product</button>
+    </div>
+  `;
 }
 
 async function mapToProduct(productId) {
-  if (!state.currentBarcode) return;
+  if (!state.currentBarcode || state.saveInFlight) return;
+  state.saveInFlight = true;
   try {
-    await api(`/admin/api/products/${encodeURIComponent(productId)}/barcodes`, {
+    const result = await api(`/admin/api/products/${encodeURIComponent(productId)}/barcodes`, {
       method: "POST",
       body: JSON.stringify({
         barcode: state.currentBarcode,
         label: "Mapped barcode",
-        is_primary: false
+        is_primary: false,
+        source_screen: "phone_mapping"
       })
     });
     showResult({
@@ -226,7 +289,10 @@ async function mapToProduct(productId) {
       message: `Linked to ${productId}. Scan the next product.`,
       variant: "mapped"
     });
+    state.lastAction = { auditId: result.mapping_audit_id, barcode: state.currentBarcode, productId, title: productId };
     setStatus("Saved", "ok");
+    vibrate(45);
+    showRecovery(`Mapped to ${productId}`);
     resetForNext(false);
   } catch (err) {
     showResult({
@@ -236,19 +302,23 @@ async function mapToProduct(productId) {
       variant: "error"
     });
     setStatus("Save failed", "error");
+    vibrate([90, 45, 90]);
+  } finally {
+    state.saveInFlight = false;
   }
 }
 
 async function createProduct(event) {
   event.preventDefault();
-  if (!state.currentBarcode) return;
+  if (!state.currentBarcode || state.saveInFlight) return;
   const name = els.createName.value.trim();
   if (!name) {
     els.createName.focus();
     return;
   }
+  state.saveInFlight = true;
   try {
-    await api("/admin/api/products", {
+    const result = await api("/admin/api/products", {
       method: "POST",
       body: JSON.stringify({
         barcode: state.currentBarcode,
@@ -259,17 +329,21 @@ async function createProduct(event) {
         unit: els.createUnit.value.trim() || "each",
         photo_url: els.createPhoto.value.trim() || null,
         notes: els.createNotes.value.trim() || null,
-        draft_status: "confirmed"
+        draft_status: "draft",
+        source_screen: "phone_mapping"
       })
     });
     showResult({
       kicker: `Created ${state.currentBarcode}`,
       title: name,
-      message: "New catalog product saved. Scan the next barcode.",
+      message: "Draft product saved for admin review. Scan the next barcode.",
       suggestion: { image_url: els.createPhoto.value.trim() },
       variant: "mapped"
     });
+    state.lastAction = { auditId: result.mapping_audit_id, barcode: state.currentBarcode, productId: result.product_id, title: name };
     setStatus("Created", "ok");
+    vibrate(45);
+    showRecovery(`Created draft ${name}`);
     resetForNext(false);
   } catch (err) {
     showResult({
@@ -279,20 +353,71 @@ async function createProduct(event) {
       variant: "error"
     });
     setStatus("Create failed", "error");
+    vibrate([90, 45, 90]);
+  } finally {
+    state.saveInFlight = false;
+  }
+}
+
+function showRecovery(message) {
+  const action = state.lastAction;
+  els.recovery.innerHTML = `
+    <div>
+      <strong>${escapeHtml(message)}</strong>
+      <span>${escapeHtml(action?.barcode || "")}</span>
+    </div>
+    <button id="mappingUndoLast" type="button" ${action?.auditId ? "" : "disabled"}>Undo</button>
+    <button id="mappingRecoveryNext" type="button">Scan next</button>
+  `;
+  els.recovery.classList.remove("hidden");
+}
+
+async function undoLastAction() {
+  const action = state.lastAction;
+  if (!action?.auditId) return;
+  try {
+    await api(`/admin/api/barcode-mapping/recent/${encodeURIComponent(action.auditId)}/undo`, {
+      method: "POST",
+      body: "{}"
+    });
+    showResult({
+      kicker: `Undone ${action.barcode}`,
+      title: "Last mapping removed",
+      message: "The barcode is available again. Scan or type it when ready.",
+      variant: "unmapped"
+    });
+    setStatus("Undo complete", "ok");
+    vibrate([30, 30, 30]);
+    state.lastAction = null;
+    els.recovery.classList.add("hidden");
+    resetForNext(false);
+  } catch (err) {
+    showResult({
+      kicker: "Undo failed",
+      title: "Could not undo last action",
+      message: err.message,
+      variant: "error"
+    });
+    setStatus("Undo failed", "error");
+    vibrate([90, 45, 90]);
   }
 }
 
 function resetForNext(clearCard = true) {
   state.currentBarcode = "";
   state.currentSuggestion = {};
+  state.scanLocked = false;
   els.manualBarcode.value = "";
   els.productSearch.value = "";
   els.productResults.innerHTML = "";
+  els.suggestedResults.innerHTML = "";
   els.createForm.reset();
   els.createUnit.value = "each";
   setReadyForMapping(false);
   showPanels("");
+  showSuggestedMatches(false);
   if (clearCard) {
+    els.recovery.classList.add("hidden");
     showResult({
       kicker: "Waiting for barcode",
       title: "Scan a bottle or case barcode",
@@ -336,7 +461,7 @@ function stopCamera() {
 async function runNativeLoop() {
   while (state.scanning && state.detector) {
     try {
-      if (!state.scanInFlight && els.preview.readyState >= 2) {
+      if (!state.scanInFlight && !state.scanLocked && els.preview.readyState >= 2) {
         const codes = await state.detector.detect(els.preview);
         const barcode = decodedBarcodeText(codes[0]);
         if (barcode) await lookupBarcode(barcode);
@@ -363,7 +488,7 @@ function startZxingLoop() {
   state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, 180);
   state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
     const barcode = decodedBarcodeText(result);
-    if (barcode && !state.scanInFlight) lookupBarcode(barcode);
+    if (barcode && !state.scanInFlight && !state.scanLocked) lookupBarcode(barcode);
   });
 }
 
@@ -387,13 +512,16 @@ function bindEvents() {
     event.preventDefault();
     lookupBarcode(els.manualBarcode.value);
   });
+  els.openSearch.addEventListener("click", () => {
+    showPanels("existing");
+    els.productSearch.focus();
+  });
   els.showExisting.addEventListener("click", () => {
     showPanels("existing");
     els.productSearch.focus();
   });
   els.showCreate.addEventListener("click", () => {
-    showPanels("create");
-    els.createName.focus();
+    openCreatePanel();
   });
   els.scanNext.addEventListener("click", () => resetForNext(true));
   els.clear.addEventListener("click", () => resetForNext(true));
@@ -406,8 +534,24 @@ function bindEvents() {
     state.searchTimer = setTimeout(() => searchProducts(), 250);
   });
   els.productResults.addEventListener("click", (event) => {
+    if (event.target.closest(".mapping-create-draft-cta")) {
+      openCreatePanel();
+      return;
+    }
     const button = event.target.closest(".mapping-product-choice");
     if (button?.dataset.productId) mapToProduct(button.dataset.productId);
+  });
+  els.suggestedResults.addEventListener("click", (event) => {
+    if (event.target.closest(".mapping-create-draft-cta")) {
+      openCreatePanel();
+      return;
+    }
+    const button = event.target.closest(".mapping-product-choice");
+    if (button?.dataset.productId) mapToProduct(button.dataset.productId);
+  });
+  els.recovery.addEventListener("click", (event) => {
+    if (event.target.closest("#mappingUndoLast")) undoLastAction();
+    if (event.target.closest("#mappingRecoveryNext")) resetForNext(true);
   });
   els.createForm.addEventListener("submit", createProduct);
   window.addEventListener("pagehide", stopCamera);

@@ -49,12 +49,25 @@
           <p>When the barcode is not already mapped, choose an existing product or add it as a new catalog item.</p>
         </section>
 
+        <section id="mappingSuggestedPanel" class="mapping-card mapping-panel hidden">
+          <div class="mapping-panel-head">
+            <div>
+              <p class="mapping-kicker">Best matches</p>
+              <h2>Tap product to map</h2>
+            </div>
+            <button id="mappingOpenSearch" class="mapping-secondary" type="button">Search all</button>
+          </div>
+          <div id="mappingSuggestedResults" class="mapping-product-results"></div>
+        </section>
+
         <section id="mappingActions" class="mapping-action-grid hidden">
           <button id="mappingShowExisting" type="button">Map to Existing Product</button>
-          <button id="mappingShowCreate" type="button">Add New Product</button>
+          <button id="mappingShowCreate" type="button">Create Draft Product</button>
           <button id="mappingScanNext" class="mapping-secondary" type="button">Scan Next</button>
           <button id="mappingClear" class="mapping-secondary" type="button">Clear</button>
         </section>
+
+        <section id="mappingRecovery" class="mapping-recovery hidden" aria-live="polite"></section>
 
         <section id="mappingExistingPanel" class="mapping-card mapping-panel hidden">
           <h2>Choose product</h2>
@@ -66,22 +79,25 @@
         </section>
 
         <section id="mappingCreatePanel" class="mapping-card mapping-panel hidden">
-          <h2>Add new product</h2>
+          <h2>Create draft product</h2>
           <form id="mappingCreateForm" class="mapping-create-form">
             <label>Name<input id="mappingCreateName" required></label>
             <label>BIN<input id="mappingCreateBin" placeholder="Optional"></label>
-            <label>Category<input id="mappingCreateCategory"></label>
-            <label>Size<input id="mappingCreateSize" placeholder="e.g. 70cl"></label>
-            <label>Unit<input id="mappingCreateUnit" value="each"></label>
-            <label>Photo URL<input id="mappingCreatePhoto"></label>
-            <label>Notes<textarea id="mappingCreateNotes" rows="3"></textarea></label>
-            <button type="submit">Create Product</button>
+            <details class="mapping-more-fields">
+              <summary>More details</summary>
+              <label>Category<input id="mappingCreateCategory"></label>
+              <label>Size<input id="mappingCreateSize" placeholder="e.g. 70cl"></label>
+              <label>Unit<input id="mappingCreateUnit" value="each"></label>
+              <label>Photo URL<input id="mappingCreatePhoto"></label>
+              <label>Notes<textarea id="mappingCreateNotes" rows="3"></textarea></label>
+            </details>
+            <button type="submit">Create Draft</button>
           </form>
         </section>
       </section>
     </main>
 
     <script src="/vendor/zxing-library.min.js"></script>
-    <script src="/mapping.js?v=phone-mapping-1" type="module"></script>
+    <script src="/mapping.js?v=phone-mapping-3" type="module"></script>
   </body>
 </html>

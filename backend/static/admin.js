@@ -14,6 +14,7 @@ const state = {
   productsTotal: 0,
   selectedProductIds: [],
   mappingProducts: [],
+  mappingRecent: [],
   mappingLimit: 50,
   mappingOffset: 0,
   mappingTotal: 0,
@@ -42,6 +43,9 @@ const els = {
   mappingSearch: document.querySelector("#mappingSearch"),
   mappingOnlyMissing: document.querySelector("#mappingOnlyMissing"),
   mappingReloadButton: document.querySelector("#mappingReloadButton"),
+  mappingRecentReloadButton: document.querySelector("#mappingRecentReloadButton"),
+  mappingRecentPanel: document.querySelector("#mappingRecentPanel"),
+  mappingRecentList: document.querySelector("#mappingRecentList"),
   mappingCountText: document.querySelector("#mappingCountText"),
   mappingActiveCard: document.querySelector("#mappingActiveCard"),
   mappingBarcodeForm: document.querySelector("#mappingBarcodeForm"),
@@ -497,6 +501,60 @@ async function loadMappingProducts(append = false) {
   }
 }
 
+function renderMappingRecent() {
+  els.mappingRecentList.innerHTML = state.mappingRecent.length ? state.mappingRecent.map((item) => {
+    const name = item.current_product_name || item.product_name || item.product_id;
+    const undone = Boolean(item.undone_at);
+    const canUndo = !undone && ["add_alias", "create_product"].includes(item.action);
+    return `
+      <article class="mapping-recent-row ${undone ? "undone" : ""}">
+        <div>
+          <h3>${escapeHtml(name)}</h3>
+          <p class="meta-details">
+            <span><strong>Barcode:</strong> ${escapeHtml(item.barcode)}</span>
+            <span><strong>Action:</strong> ${escapeHtml(item.action.replaceAll("_", " "))}</span>
+            <span><strong>Source:</strong> ${escapeHtml(item.source || "admin")}</span>
+            <span><strong>Time:</strong> ${escapeHtml((item.created_at || "").slice(0, 16).replace("T", " "))}</span>
+          </p>
+          ${item.draft_status === "draft" ? `<p class="meta-details">${statusBadge("draft review")}</p>` : ""}
+        </div>
+        ${undone ? statusBadge("undone") : statusBadge(item.action === "create_product" ? "draft created" : "mapped")}
+        <button class="secondary ${canUndo ? "warning" : ""}" data-action="undo-mapping" data-id="${escapeHtml(item.id)}" type="button" ${canUndo ? "" : "disabled"}>Undo</button>
+      </article>
+    `;
+  }).join("") : `<p class="meta" style="text-align:center; padding:16px;">No recent mapping activity.</p>`;
+}
+
+async function loadMappingRecent() {
+  try {
+    const data = await api("/admin/api/barcode-mapping/recent?limit=20");
+    state.mappingRecent = data.mappings || [];
+    renderMappingRecent();
+  } catch (err) {
+    els.mappingRecentList.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function undoMappingAudit(auditId) {
+  const item = state.mappingRecent.find((entry) => String(entry.id) === String(auditId));
+  if (!item) return;
+  const name = item.current_product_name || item.product_name || item.product_id;
+  if (!(await confirmDialog("Undo mapping", `Undo ${item.barcode} from ${name}?`, "Undo"))) return;
+  try {
+    await api(`/admin/api/barcode-mapping/recent/${encodeURIComponent(auditId)}/undo`, {
+      method: "POST",
+      body: "{}"
+    });
+    showToast("Mapping undone");
+    await loadMappingRecent();
+    await loadMappingProducts();
+    await loadDashboard();
+    await loadProducts(els.productSearch.value);
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
 function selectNextMappingProduct() {
   if (!state.mappingProducts.length) {
     state.selectedMappingProductId = null;
@@ -549,12 +607,14 @@ async function saveMappedBarcode() {
       body: JSON.stringify({
         barcode,
         label: els.mappingLabelInput.value.trim() || "Mapped barcode",
-        is_primary: false
+        is_primary: false,
+        source_screen: "admin_mapping"
       })
     });
     showToast(`Mapped ${barcode} to ${product.name}`);
     els.mappingBarcodeInput.value = "";
     els.mappingLookupStatus.textContent = "";
+    await loadMappingRecent();
     await loadMappingProducts(false);
     await loadDashboard();
     await loadProducts(els.productSearch.value);
@@ -956,6 +1016,7 @@ function bindEvents() {
       els.views.forEach((view) => view.classList.toggle("hidden", view.id !== `${button.dataset.view}View`));
       if (button.dataset.view === "mapping") {
         loadMappingProducts();
+        loadMappingRecent();
         setTimeout(() => els.mappingBarcodeInput.focus(), 80);
       }
       if (button.dataset.view === "export") loadExportReview();
@@ -1144,6 +1205,11 @@ function bindEvents() {
   });
   els.mappingOnlyMissing.addEventListener("change", () => loadMappingProducts());
   els.mappingReloadButton.addEventListener("click", () => loadMappingProducts());
+  els.mappingRecentReloadButton.addEventListener("click", () => loadMappingRecent());
+  els.mappingRecentList.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    if (button?.dataset.action === "undo-mapping") await undoMappingAudit(button.dataset.id);
+  });
   els.mappingLoadMoreButton.addEventListener("click", async () => {
     state.mappingOffset += state.mappingLimit;
     await loadMappingProducts(true);

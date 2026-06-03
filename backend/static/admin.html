@@ -133,8 +133,19 @@
               <span>Needs barcode only</span>
             </label>
             <span id="mappingCountText" class="meta">0 products</span>
+            <button id="mappingRecentReloadButton" class="secondary" type="button">Recent Mappings</button>
             <button id="mappingReloadButton" class="secondary" type="button">Reload Queue</button>
           </div>
+          <section id="mappingRecentPanel" class="mapping-recent-panel">
+            <div class="mapping-recent-head">
+              <div>
+                <h3>Recent Mapping Activity</h3>
+                <p class="section-desc">Use this to catch and undo phone mapping mistakes quickly.</p>
+              </div>
+              <span class="badge">last 20</span>
+            </div>
+            <div id="mappingRecentList" class="mapping-recent-list"></div>
+          </section>
           <section class="mapping-console">
             <div id="mappingActiveCard" class="mapping-active"></div>
             <form id="mappingBarcodeForm" class="mapping-capture">
@@ -300,6 +311,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=mapping-1" type="module"></script>
+    <script src="/admin.js?v=mapping-2" type="module"></script>
   </body>
 </html>

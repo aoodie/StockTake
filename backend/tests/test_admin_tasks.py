@@ -23,7 +23,7 @@ def test_mapping_page_is_served():
     client = TestClient(app)
     response = client.get("/mapping")
     assert response.status_code == 200
-    assert "mapping.js?v=phone-mapping-1" in response.text
+    assert "mapping.js?v=phone-mapping-3" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -197,6 +197,124 @@ def test_admin_login_and_task_approval_confirms_product(tmp_path, monkeypatch):
     assert product["draft_status"] == "confirmed"
     assert task["status"] == "approved"
     assert task["approved_at"]
+
+
+def test_admin_task_approval_cannot_steal_existing_barcode_alias(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    owner = client.post(
+        "/admin/api/products",
+        json={"barcode": "owner-primary", "name": "Original Owner", "bin": "A-1"},
+    )
+    assert owner.status_code == 200
+    alias = client.post(
+        "/admin/api/products/product-owner-primary/barcodes",
+        json={"barcode": "stolen", "label": "Bottle barcode"},
+    )
+    assert alias.status_code == 200
+
+    now = datetime.now(timezone.utc).isoformat()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO product_tasks (
+                id, barcode, status, source, draft_product_id, suggested_json, created_at, updated_at
+            )
+            VALUES ('task-stolen', 'stolen', 'review_needed', 'scanner', NULL, '{}', ?, ?)
+            """,
+            (now, now),
+        )
+        db.commit()
+
+    approve = client.post(
+        "/admin/api/tasks/task-stolen/approve",
+        json={
+            "name": "Stale Task Product",
+            "bin": "B-2",
+            "category": "",
+            "size": "",
+            "unit": "each",
+            "photo_url": "",
+            "notes": "",
+        },
+    )
+    assert approve.status_code == 400
+
+    lookup = client.get("/admin/api/products/lookup/stolen")
+    assert lookup.status_code == 200
+    assert lookup.json()["product"]["id"] == "product-owner-primary"
+    assert lookup.json()["product"]["name"] == "Original Owner"
+    assert client.get("/admin/api/products/product-stolen").status_code == 404
+
+
+def test_admin_task_approval_with_draft_product_cannot_ignore_owned_barcode(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    owner = client.post(
+        "/admin/api/products",
+        json={"barcode": "owner-primary", "name": "Original Owner", "bin": "A-1"},
+    )
+    assert owner.status_code == 200
+    alias = client.post(
+        "/admin/api/products/product-owner-primary/barcodes",
+        json={"barcode": "stolen-draft", "label": "Bottle barcode"},
+    )
+    assert alias.status_code == 200
+
+    now = datetime.now(timezone.utc).isoformat()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO products (
+                id, barcode, bin, name, category, size, unit, photo_url, notes,
+                draft_status, product_updated_at
+            )
+            VALUES ('draft-owned', 'draft-owned-primary', '', 'Draft owned', '', '', 'each', '', '', 'draft', ?)
+            """,
+            (now,),
+        )
+        db.execute(
+            """
+            INSERT INTO product_tasks (
+                id, barcode, status, source, draft_product_id, suggested_json, created_at, updated_at
+            )
+            VALUES ('task-stolen-draft', 'stolen-draft', 'review_needed', 'scanner', 'draft-owned', '{}', ?, ?)
+            """,
+            (now, now),
+        )
+        db.commit()
+
+    approve = client.post(
+        "/admin/api/tasks/task-stolen-draft/approve",
+        json={
+            "name": "Should Not Approve",
+            "bin": "B-2",
+            "category": "",
+            "size": "",
+            "unit": "each",
+            "photo_url": "",
+            "notes": "",
+        },
+    )
+    assert approve.status_code == 400
+
+    task = client.get("/admin/api/tasks").json()["tasks"][0]
+    assert task["id"] == "task-stolen-draft"
+    assert task["status"] == "review_needed"
+
+    lookup = client.get("/admin/api/products/lookup/stolen-draft")
+    assert lookup.status_code == 200
+    assert lookup.json()["product"]["id"] == "product-owner-primary"
 
 
 def test_admin_only_management_routes_and_status_validation(tmp_path, monkeypatch):
@@ -381,6 +499,218 @@ def test_barcode_mapping_queue_tracks_real_aliases(tmp_path, monkeypatch):
     all_products = client.get("/admin/api/barcode-mapping/products?only_missing=false")
     assert all_products.status_code == 200
     assert all_products.json()["products"][0]["real_barcode_count"] == 1
+
+
+def test_barcode_mapping_recent_and_undo_alias(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post(
+        "/admin/api/products",
+        json={"barcode": "primary-undo", "name": "Undo Test Product", "bin": "A-1"},
+    )
+    assert created.status_code == 200
+
+    mapped = client.post(
+        "/admin/api/products/product-primary-undo/barcodes",
+        json={"barcode": "alias-undo", "label": "Bottle barcode", "source_screen": "phone_mapping"},
+    )
+    assert mapped.status_code == 200
+    audit_id = mapped.json()["mapping_audit_id"]
+
+    recent = client.get("/admin/api/barcode-mapping/recent")
+    assert recent.status_code == 200
+    rows = recent.json()["mappings"]
+    assert rows[0]["id"] == audit_id
+    assert rows[0]["barcode"] == "alias-undo"
+    assert rows[0]["source"] == "phone_mapping"
+    assert rows[0]["undone_at"] is None
+
+    undone = client.post(f"/admin/api/barcode-mapping/recent/{audit_id}/undo")
+    assert undone.status_code == 200
+
+    lookup = client.get("/admin/api/barcode-mapping/barcodes/alias-undo")
+    assert lookup.status_code == 200
+    assert lookup.json()["owner"] is None
+
+    second_undo = client.post(f"/admin/api/barcode-mapping/recent/{audit_id}/undo")
+    assert second_undo.status_code == 400
+
+
+def test_barcode_mapping_same_product_primary_is_not_audited_or_undoable(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post(
+        "/admin/api/products",
+        json={"barcode": "primary-safe", "name": "Primary Safe Product", "bin": "A-1"},
+    )
+    assert created.status_code == 200
+
+    remap_primary = client.post(
+        "/admin/api/products/product-primary-safe/barcodes",
+        json={"barcode": "primary-safe", "label": "Mapped barcode", "source_screen": "phone_mapping"},
+    )
+    assert remap_primary.status_code == 400
+
+    alias = client.post(
+        "/admin/api/products/product-primary-safe/barcodes",
+        json={"barcode": "alias-safe", "label": "Bottle barcode", "source_screen": "phone_mapping"},
+    )
+    assert alias.status_code == 200
+
+    remap_alias = client.post(
+        "/admin/api/products/product-primary-safe/barcodes",
+        json={"barcode": "alias-safe", "label": "Bottle barcode", "source_screen": "phone_mapping"},
+    )
+    assert remap_alias.status_code == 200
+    assert remap_alias.json()["status"] == "already_mapped"
+    assert remap_alias.json()["mapping_audit_id"] is None
+
+    recent = client.get("/admin/api/barcode-mapping/recent")
+    assert recent.status_code == 200
+    alias_rows = [row for row in recent.json()["mappings"] if row["barcode"] == "alias-safe"]
+    assert len(alias_rows) == 1
+
+    detail = client.get("/admin/api/products/product-primary-safe").json()["product"]
+    primary_alias = next(row for row in detail["barcodes"] if row["barcode"] == "primary-safe")
+    assert primary_alias["is_primary"] == 1
+
+
+def test_barcode_mapping_create_undo_blocked_after_later_edit(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post(
+        "/admin/api/products",
+        json={
+            "barcode": "draft-safe",
+            "name": "Draft Safe Product",
+            "bin": "A-1",
+            "draft_status": "draft",
+            "source_screen": "phone_mapping",
+        },
+    )
+    assert created.status_code == 200
+    audit_id = created.json()["mapping_audit_id"]
+
+    edited = client.patch("/admin/api/products/product-draft-safe", json={"bin": "B-2"})
+    assert edited.status_code == 200
+
+    undo = client.post(f"/admin/api/barcode-mapping/recent/{audit_id}/undo")
+    assert undo.status_code == 400
+
+    detail = client.get("/admin/api/products/product-draft-safe")
+    assert detail.status_code == 200
+
+
+def test_barcode_mapping_create_undo_blocked_after_bulk_update(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post(
+        "/admin/api/products",
+        json={
+            "barcode": "bulk-safe",
+            "name": "Bulk Safe Product",
+            "bin": "A-1",
+            "draft_status": "draft",
+            "source_screen": "phone_mapping",
+        },
+    )
+    assert created.status_code == 200
+    audit_id = created.json()["mapping_audit_id"]
+
+    updated = client.post(
+        "/admin/api/products/bulk-update",
+        json={"product_ids": ["product-bulk-safe"], "bin": "B-2"},
+    )
+    assert updated.status_code == 200
+
+    undo = client.post(f"/admin/api/barcode-mapping/recent/{audit_id}/undo")
+    assert undo.status_code == 400
+
+    detail = client.get("/admin/api/products/product-bulk-safe")
+    assert detail.status_code == 200
+    assert detail.json()["product"]["bin"] == "B-2"
+
+
+def test_barcode_mapping_rejects_leading_zero_variant_duplicate(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    first = client.post(
+        "/admin/api/products",
+        json={"barcode": "012345678905", "name": "UPC Variant Product", "bin": "A-1"},
+    )
+    assert first.status_code == 200
+
+    duplicate = client.post(
+        "/admin/api/products",
+        json={"barcode": "12345678905", "name": "Duplicate UPC", "bin": "A-2"},
+    )
+    assert duplicate.status_code == 400
+
+    lookup = client.get("/admin/api/products/lookup/12345678905")
+    assert lookup.status_code == 200
+    assert lookup.json()["exists"] is True
+    assert lookup.json()["product"]["name"] == "UPC Variant Product"
+
+
+def test_barcode_mapping_rejects_transitive_upc_ean_variants(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    first = client.post(
+        "/admin/api/products",
+        json={"barcode": "0012345678905", "name": "EAN Variant Product", "bin": "A-1"},
+    )
+    assert first.status_code == 200
+
+    for variant in ("012345678905", "12345678905"):
+        lookup = client.get(f"/admin/api/products/lookup/{variant}")
+        assert lookup.status_code == 200
+        assert lookup.json()["exists"] is True
+        assert lookup.json()["product"]["name"] == "EAN Variant Product"
+
+        duplicate = client.post(
+            "/admin/api/products",
+            json={"barcode": variant, "name": f"Duplicate {variant}", "bin": "A-2"},
+        )
+        assert duplicate.status_code == 400
+
+        other = client.post(
+            "/admin/api/products/product-0012345678905/barcodes",
+            json={"barcode": variant, "label": "Variant barcode", "source_screen": "phone_mapping"},
+        )
+        assert other.status_code in {200, 400}
+        if other.status_code == 200:
+            assert other.json()["status"] == "already_mapped"
+            assert other.json()["mapping_audit_id"] is None
 
 
 def test_product_patch_rejects_barcode_changes(tmp_path, monkeypatch):

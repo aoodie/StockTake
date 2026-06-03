@@ -40,6 +40,7 @@ class ProductUpsertRequest(BaseModel):
     photo_url: str | None = None
     notes: str | None = None
     draft_status: Literal["confirmed", "draft"] = "confirmed"
+    source_screen: Literal["admin", "admin_mapping", "phone_mapping"] = "admin"
 
 class ProductPatchRequest(BaseModel):
     barcode: str | None = None
@@ -83,6 +84,7 @@ class ProductBarcodeRequest(BaseModel):
     barcode: str = Field(min_length=1)
     label: str = "Alias barcode"
     is_primary: bool = False
+    source_screen: Literal["admin", "admin_mapping", "phone_mapping"] = "admin"
 
 class ProductMergeRequest(BaseModel):
     source_product_id: str = Field(min_length=1)

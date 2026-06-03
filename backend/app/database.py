@@ -148,6 +148,19 @@ def init_db(force: bool = False) -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS barcode_mapping_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                barcode TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                product_name TEXT,
+                action TEXT NOT NULL,
+                label TEXT,
+                source TEXT NOT NULL DEFAULT 'admin',
+                details_json TEXT,
+                created_at TEXT NOT NULL,
+                undone_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS procurewizard_imports (
                 id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -233,6 +246,10 @@ def init_db(force: bool = False) -> None:
             ON products(product_updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_products_name_nocase
             ON products(name COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_barcode_mapping_audit_created
+            ON barcode_mapping_audit(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_barcode_mapping_audit_barcode
+            ON barcode_mapping_audit(barcode);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_rows_import_pid
             ON procurewizard_rows(import_id, pid);
             CREATE INDEX IF NOT EXISTS idx_procurewizard_rows_product
