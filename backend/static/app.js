@@ -12,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=scanner-recover-2";
+} from "./frontend-utils.js?v=scanner-diagnostics-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -82,6 +82,7 @@ const els = {
   diagnosticsButton: document.querySelector("#diagnosticsButton"),
   diagnosticsDialog: document.querySelector("#diagnosticsDialog"),
   diagnosticsList: document.querySelector("#diagnosticsList"),
+  copyDiagnosticsButton: document.querySelector("#copyDiagnosticsButton"),
   resetScannerButton: document.querySelector("#resetScannerButton"),
   clearCacheButton: document.querySelector("#clearCacheButton"),
   exportDialog: document.querySelector("#exportDialog"),
@@ -1161,7 +1162,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-recover-2";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-diagnostics-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1395,6 +1396,35 @@ function renderDiagnostics() {
     .join("");
 }
 
+function diagnosticsText() {
+  const entries = { ...diagnostics, ...videoDiagnostics() };
+  return Object.entries(DIAGNOSTIC_LABELS)
+    .map(([key, label]) => `${label}: ${entries[key] ?? "-"}`)
+    .join("\n");
+}
+
+async function copyDiagnostics() {
+  const text = diagnosticsText();
+  try {
+    await navigator.clipboard.writeText(text);
+    pulse("Diagnostics copied");
+    setSyncStatus("Diagnostics copied");
+    return;
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.readOnly = true;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+    pulse("Diagnostics copied");
+    setSyncStatus("Diagnostics copied");
+  }
+}
+
 function videoDiagnostics() {
   const track = state.stream?.getVideoTracks?.()[0];
   return {
@@ -1620,6 +1650,7 @@ function bindEvents() {
     renderDiagnostics();
     els.diagnosticsDialog.showModal();
   });
+  els.copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
   els.resetScannerButton.addEventListener("click", resetScanner);
   els.clearCacheButton.addEventListener("click", clearCacheAndReload);
   els.missingBinList.addEventListener("click", async (event) => {
