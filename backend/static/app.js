@@ -12,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=scanner-zxing-1";
+} from "./frontend-utils.js?v=scanner-video-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -165,8 +165,6 @@ let state = {
   zxingControls: null,
   zxingLoadPromise: null,
   cameraStartPromise: null,
-  zxingCanvas: null,
-  zxingImage: null,
   decodeInFlight: false,
   decodeErrors: 0,
   framesSkipped: 0,
@@ -283,8 +281,6 @@ async function saveState() {
     detector: undefined,
     zxingReader: undefined,
     zxingControls: undefined,
-    zxingCanvas: undefined,
-    zxingImage: undefined,
     decodeInFlight: undefined,
     hudTimer: undefined,
     scanInFlight: undefined,
@@ -1213,7 +1209,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-zxing-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-video-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1249,9 +1245,12 @@ async function startZxingScanLoop(generation = state.decoderGeneration) {
       hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, formats);
     }
     state.zxingReader = new zxing.BrowserMultiFormatReader(hints, ZXING_DETECT_INTERVAL_MS);
-    state.zxingCanvas = state.zxingCanvas || document.createElement("canvas");
-    state.zxingImage = state.zxingImage || new Image();
-    runZxingRoiLoop(state.zxingReader, generation);
+    if (typeof state.zxingReader.decodeFromVideoElementContinuously !== "function") {
+      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing video decoder unavailable" });
+      state.zxingReader = null;
+      return false;
+    }
+    runZxingVideoLoop(state.zxingReader, generation);
     return true;
   }
   return false;
@@ -1270,84 +1269,32 @@ function shouldSkipDecode() {
   return state.mode !== "multi" && Boolean(state.pendingBarcode);
 }
 
-function drawVideoRoi(fullFrame = false) {
-  const sourceWidth = els.preview.videoWidth;
-  const sourceHeight = els.preview.videoHeight;
-  if (!sourceWidth || !sourceHeight) return null;
-  const roiWidth = fullFrame ? sourceWidth : Math.floor(sourceWidth * 0.76);
-  const roiHeight = fullFrame ? sourceHeight : Math.floor(sourceHeight * 0.42);
-  const sx = Math.floor((sourceWidth - roiWidth) / 2);
-  const sy = Math.floor((sourceHeight - roiHeight) / 2);
-  const targetWidth = fullFrame ? 800 : 720;
-  const targetHeight = Math.max(220, Math.round(targetWidth * (roiHeight / roiWidth)));
-  const canvas = state.zxingCanvas;
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-  canvas.getContext("2d", { willReadFrequently: true }).drawImage(
-    els.preview,
-    sx,
-    sy,
-    roiWidth,
-    roiHeight,
-    0,
-    0,
-    targetWidth,
-    targetHeight
-  );
-  updateDiagnostics({ roi_size: `${targetWidth}x${targetHeight}${fullFrame ? " full" : ""}` });
-  return canvas;
-}
-
-function imageLoaded(image) {
-  return new Promise((resolve, reject) => {
-    image.onload = resolve;
-    image.onerror = reject;
-  });
-}
-
-async function decodeZxingRoi(reader = state.zxingReader, fullFrame = false) {
-  const canvas = drawVideoRoi(fullFrame);
-  if (!canvas || !reader || !state.zxingImage) return "";
-  const wait = imageLoaded(state.zxingImage);
-  state.zxingImage.src = canvas.toDataURL("image/jpeg", 0.62);
-  await wait;
-  const result = await reader.decodeFromImageElement(state.zxingImage);
-  return decodedBarcodeText(result);
-}
-
 function decoderIsCurrent(generation, decoder) {
   return state.scanLoopActive && generation === state.decoderGeneration && (!decoder || decoder === state.detector || decoder === state.zxingReader);
 }
 
-async function runZxingRoiLoop(reader, generation) {
-  let attempts = 0;
-  while (decoderIsCurrent(generation, reader)) {
+function runZxingVideoLoop(reader, generation) {
+  updateDiagnostics({ roi_size: "full video" });
+  reader.decodeFromVideoElementContinuously(els.preview, (result, error) => {
+    if (!decoderIsCurrent(generation, reader)) return;
     if (shouldSkipDecode()) {
       state.framesSkipped += 1;
       updateDiagnostics({ frames_skipped: String(state.framesSkipped) });
-      await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
-      continue;
+      return;
     }
-    state.decodeInFlight = true;
-    const startedAt = performance.now();
-    try {
-      attempts += 1;
-      const barcode = await decodeZxingRoi(reader, attempts % 16 === 0);
-      if (!decoderIsCurrent(generation, reader)) break;
-      recordDecodeDuration(startedAt);
-      updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
-      if (barcode) {
-        updateDiagnostics({ last_raw_barcode: barcode });
-        await handleScan(barcode);
-      }
-    } catch {
+
+    updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
+    const barcode = decodedBarcodeText(result);
+    if (barcode) {
+      updateDiagnostics({ last_raw_barcode: barcode });
+      void handleScan(barcode);
+      return;
+    }
+    if (error && error.name !== "NotFoundException") {
       state.decodeErrors += 1;
       updateDiagnostics({ decode_errors: String(state.decodeErrors) });
-    } finally {
-      state.decodeInFlight = false;
     }
-    await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
-  }
+  });
 }
 
 async function startNativeScanLoop(generation = state.decoderGeneration) {
