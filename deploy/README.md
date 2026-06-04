@@ -27,7 +27,19 @@ cd /opt/stocktake
 bash deploy/bootstrap_vps.sh
 ```
 
-## 4. Configure HTTPS
+## 4. Back Up Before Live Updates
+
+Before pulling new code or restarting the live service, create a server-side backup:
+
+```bash
+ssh aoodie@194.164.127.139
+cd /opt/stocktake
+bash deploy/backup_vps.sh
+```
+
+The backup archive is written to `/opt/stocktake/backups` and includes `backend/data`, covering the SQLite database/WAL files, product images, OpenAI token file, and app settings.
+
+## 5. Configure HTTPS
 
 Example with Nginx and Certbot:
 
@@ -46,4 +58,3 @@ Then open:
 ```text
 https://stock.aoodie.xyz
 ```
-

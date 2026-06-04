@@ -177,3 +177,73 @@ def test_scan_sync_does_not_mutate_existing_product_barcode(tmp_path, monkeypatc
     assert product["unit"] == "each"
     assert {row["barcode"] for row in aliases} == {"new-scanned-code", "original-code"}
     assert {row["barcode"] for row in aliases if row["is_primary"]} == {"original-code"}
+
+
+def test_sync_token_is_required_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
+    monkeypatch.setenv("STOCKTAKE_SYNC_TOKEN", "trial-token")
+    client = TestClient(app)
+
+    event = {
+        "local_id": "local-token",
+        "device_id": "device-a",
+        "session_id": "session-a",
+        "location_id": "location-a",
+        "event_type": "scan",
+        "payload": {
+            "line_id": "line-token",
+            "barcode": "5000213014231",
+            "quantity_decimal": "1",
+            "product": {
+                "id": "product-token",
+                "barcode": "5000213014231",
+                "name": "Token Test",
+                "draft_status": "confirmed",
+            },
+        },
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "idempotency_key": "device-a:local-token",
+    }
+
+    assert client.post("/sync/events", json={"events": [event]}).status_code == 403
+    response = client.post(
+        "/sync/events",
+        json={"events": [event]},
+        headers={"X-StockTake-Sync-Token": "trial-token"},
+    )
+    assert response.status_code == 200
+
+
+def test_sync_rejects_invalid_quantities(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
+    monkeypatch.delenv("STOCKTAKE_SYNC_TOKEN", raising=False)
+    client = TestClient(app)
+
+    event = {
+        "local_id": "local-negative",
+        "device_id": "device-a",
+        "session_id": "session-a",
+        "location_id": "location-a",
+        "event_type": "scan",
+        "payload": {
+            "line_id": "line-negative",
+            "barcode": "5000213014231",
+            "quantity_decimal": "-1",
+            "product": {
+                "id": "product-negative",
+                "barcode": "5000213014231",
+                "name": "Bad Quantity",
+                "draft_status": "confirmed",
+            },
+        },
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "idempotency_key": "device-a:local-negative",
+    }
+
+    response = client.post("/sync/events", json={"events": [event]})
+    assert response.status_code == 400
+    assert "Quantity cannot be negative" in response.json()["detail"]

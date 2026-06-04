@@ -338,7 +338,7 @@ def admin_apply_ai_suggestion(
         if not row or row["status"] != "pending":
             raise HTTPException(status_code=404, detail="Pending AI suggestion not found")
         item = ai_suggestion_row(row)
-        selected_fields = request.fields or allowed
+        selected_fields = request.fields
         values = {
             key: value
             for key, value in (item.get("field_values") or {}).items()

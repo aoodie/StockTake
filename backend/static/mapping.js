@@ -5,7 +5,7 @@ import {
   ZXING_FAST_FORMATS,
   decodedBarcodeText,
   normalizeBarcode
-} from "./frontend-utils.js?v=phone-mapping-3";
+} from "./frontend-utils.js?v=phone-mapping-4";
 
 const els = {
   loginView: document.querySelector("#mappingLoginView"),
@@ -29,6 +29,7 @@ const els = {
   scanNext: document.querySelector("#mappingScanNext"),
   clear: document.querySelector("#mappingClear"),
   existingPanel: document.querySelector("#mappingExistingPanel"),
+  confirmPanel: document.querySelector("#mappingConfirmPanel"),
   productSearchForm: document.querySelector("#mappingProductSearchForm"),
   productSearch: document.querySelector("#mappingProductSearch"),
   productResults: document.querySelector("#mappingProductResults"),
@@ -57,7 +58,9 @@ const state = {
   scanLocked: false,
   lastAction: null,
   saveInFlight: false,
-  searchTimer: null
+  searchTimer: null,
+  pendingProduct: null,
+  productChoices: new Map()
 };
 
 function escapeHtml(value) {
@@ -118,6 +121,7 @@ function showResult({ kicker, title, message, product, suggestion, variant = "" 
 
 function showPanels(panel = "") {
   els.existingPanel.classList.toggle("hidden", panel !== "existing");
+  els.confirmPanel.classList.toggle("hidden", panel !== "confirm");
   els.createPanel.classList.toggle("hidden", panel !== "create");
 }
 
@@ -256,6 +260,7 @@ async function searchProducts(search = els.productSearch.value.trim(), options =
 }
 
 function renderProducts(products, target = els.productResults, emptyMessage = "No products found. Try another search or add a new product.") {
+  products.forEach((product) => state.productChoices.set(product.id, product));
   target.innerHTML = products.length ? products.map((product) => `
     <button class="mapping-product-choice" type="button" data-product-id="${escapeHtml(product.id)}">
       ${product.photo_url ? `<img src="${escapeHtml(product.photo_url)}" alt="">` : `<span></span>`}
@@ -268,6 +273,34 @@ function renderProducts(products, target = els.productResults, emptyMessage = "N
       <button class="mapping-create-draft-cta" type="button">No match - create draft product</button>
     </div>
   `;
+}
+
+function showMapConfirmation(productId) {
+  const product = state.productChoices.get(productId);
+  if (!product || !state.currentBarcode) return;
+  state.pendingProduct = product;
+  const photo = product.photo_url || "";
+  const aliases = Array.isArray(product.barcodes)
+    ? product.barcodes.map((alias) => alias.barcode).filter(Boolean).slice(0, 4).join(", ")
+    : "";
+  els.confirmPanel.innerHTML = `
+    <p class="mapping-kicker">Confirm mapping</p>
+    <div class="mapping-confirm-product">
+      ${photo ? `<img src="${escapeHtml(photo)}" alt="">` : `<span class="mapping-photo-empty"></span>`}
+      <div>
+        <h2>${escapeHtml(product.name || product.id)}</h2>
+        <p>Scanned barcode: <strong>${escapeHtml(state.currentBarcode)}</strong></p>
+        <small>BIN ${escapeHtml(product.bin || product.procurewizard?.bin_number || "-")} | PID ${escapeHtml(product.procurewizard?.pid || "-")} | ${escapeHtml(product.size || product.procurewizard?.pack_size || "-")}</small>
+        ${aliases ? `<small>Known barcodes: ${escapeHtml(aliases)}</small>` : ""}
+      </div>
+    </div>
+    <div class="mapping-confirm-actions">
+      <button id="mappingConfirmMap" type="button">Map to this product</button>
+      <button id="mappingCancelMap" class="mapping-secondary" type="button">Choose another</button>
+    </div>
+  `;
+  showPanels("confirm");
+  setStatus("Confirm product");
 }
 
 async function mapToProduct(productId) {
@@ -406,6 +439,7 @@ async function undoLastAction() {
 function resetForNext(clearCard = true) {
   state.currentBarcode = "";
   state.currentSuggestion = {};
+  state.pendingProduct = null;
   state.scanLocked = false;
   els.manualBarcode.value = "";
   els.productSearch.value = "";
@@ -539,7 +573,7 @@ function bindEvents() {
       return;
     }
     const button = event.target.closest(".mapping-product-choice");
-    if (button?.dataset.productId) mapToProduct(button.dataset.productId);
+    if (button?.dataset.productId) showMapConfirmation(button.dataset.productId);
   });
   els.suggestedResults.addEventListener("click", (event) => {
     if (event.target.closest(".mapping-create-draft-cta")) {
@@ -547,7 +581,17 @@ function bindEvents() {
       return;
     }
     const button = event.target.closest(".mapping-product-choice");
-    if (button?.dataset.productId) mapToProduct(button.dataset.productId);
+    if (button?.dataset.productId) showMapConfirmation(button.dataset.productId);
+  });
+  els.confirmPanel.addEventListener("click", (event) => {
+    if (event.target.closest("#mappingConfirmMap") && state.pendingProduct?.id) {
+      mapToProduct(state.pendingProduct.id);
+    }
+    if (event.target.closest("#mappingCancelMap")) {
+      state.pendingProduct = null;
+      showPanels("existing");
+      setStatus("Ready to map", "ok");
+    }
   });
   els.recovery.addEventListener("click", (event) => {
     if (event.target.closest("#mappingUndoLast")) undoLastAction();

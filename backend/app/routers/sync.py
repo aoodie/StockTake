@@ -1,7 +1,8 @@
-import sqlite3
 import json
 import os
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+import sqlite3
+from decimal import Decimal, InvalidOperation
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response
 from ..database import (
     get_db, now_iso, normalize_identifier, init_db, 
     ensure_default_rows, product_select_sql
@@ -15,6 +16,41 @@ from ..exporter import build_stocktake_workbook
 from ..services.enrichment import fetch_product_suggestion
 
 router = APIRouter()
+
+def require_sync_write_token(x_stocktake_sync_token: str | None = Header(default=None)) -> None:
+    required = os.getenv("STOCKTAKE_SYNC_TOKEN", "").strip()
+    if required and x_stocktake_sync_token != required:
+        raise HTTPException(status_code=403, detail="Sync token required")
+
+def barcode_lookup_values(value: str) -> list[str]:
+    code = normalize_identifier(value)
+    if not code:
+        return []
+    values = [code]
+    if code.isdigit():
+        stripped = code.lstrip("0") or "0"
+        values.append(stripped)
+        values.extend([stripped.zfill(8), stripped.zfill(12), stripped.zfill(13)])
+        if len(code) in {8, 12, 13}:
+            values.append(code.lstrip("0") or code)
+    return list(dict.fromkeys(values))
+
+def normalize_event_quantity(value: object) -> str:
+    text = normalize_identifier(value)
+    if not text:
+        raise HTTPException(status_code=400, detail="Quantity is required")
+    try:
+        quantity = Decimal(text)
+    except (InvalidOperation, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Quantity must be a decimal number") from exc
+    if quantity < 0:
+        raise HTTPException(status_code=400, detail="Quantity cannot be negative")
+    if quantity > Decimal("999999"):
+        raise HTTPException(status_code=400, detail="Quantity is too large")
+    if abs(quantity.as_tuple().exponent) > 4:
+        raise HTTPException(status_code=400, detail="Quantity supports up to 4 decimal places")
+    formatted = format(quantity.normalize(), "f")
+    return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
 
 def suggestion_has_real_name(suggestion: dict, barcode: str) -> bool:
     name = normalize_identifier(suggestion.get("name"))
@@ -31,9 +67,15 @@ def insert_barcode_alias(
     barcode = normalize_identifier(barcode)
     if not barcode:
         return
-    owner = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (barcode,)).fetchone()
+    codes = barcode_lookup_values(barcode)
+    placeholders = ",".join("?" for _ in codes)
+    owner = db.execute(
+        f"SELECT barcode, product_id FROM product_barcodes WHERE barcode IN ({placeholders})",
+        codes,
+    ).fetchone()
     if owner and owner["product_id"] != product_id:
         return
+    barcode = owner["barcode"] if owner else barcode
     db.execute(
         """
         INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
@@ -114,8 +156,6 @@ def enrich_task_by_id(task_id: str) -> dict:
                 task_id,
             ),
         )
-        if status == "review_needed":
-            apply_suggestion_to_draft(db, fresh_task, suggestion)
         db.commit()
     return {"task_id": task_id, "status": status, "suggested": suggestion}
 
@@ -225,7 +265,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
                 barcode,
                 product.get("bin"),
                 product.get("name"),
-                str(payload.get("quantity_decimal", "1")),
+                normalize_event_quantity(payload.get("quantity_decimal", "1")),
                 product.get("draft_status", "confirmed"),
                 created,
                 event.device_id,
@@ -241,7 +281,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
             "SELECT quantity_decimal FROM stocktake_lines WHERE id = ?", (line_id,)
         ).fetchone()
         original = str(payload.get("original_quantity", current["quantity_decimal"] if current else "0"))
-        new = str(payload.get("new_quantity", "0"))
+        new = normalize_event_quantity(payload.get("new_quantity", "0"))
         db.execute("UPDATE stocktake_lines SET quantity_decimal = ? WHERE id = ?", (new, line_id))
         db.execute(
             """
@@ -301,7 +341,11 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
     return task_ids
 
 @router.post("/sync/events")
-def sync_events(request: SyncRequest, background_tasks: BackgroundTasks) -> dict:
+def sync_events(
+    request: SyncRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(require_sync_write_token),
+) -> dict:
     init_db()
     results = []
     task_ids: list[str] = []

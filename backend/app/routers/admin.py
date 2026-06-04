@@ -470,6 +470,7 @@ def admin_merge_products(
 
         db.execute("UPDATE stocktake_lines SET product_id = ? WHERE product_id = ?", (target_id, source_id))
         db.execute("UPDATE product_tasks SET draft_product_id = ? WHERE draft_product_id = ?", (target_id, source_id))
+        db.execute("UPDATE procurewizard_rows SET product_id = ?, updated_at = ? WHERE product_id = ?", (target_id, now_iso(), source_id))
         db.execute(
             """
             UPDATE product_barcodes
@@ -716,6 +717,16 @@ def admin_delete_product(
         before = product_snapshot(db, product_id)
         if not before:
             raise HTTPException(status_code=404, detail="Product not found")
+        dependency = db.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM stocktake_lines WHERE product_id = ?) AS line_count,
+                (SELECT COUNT(*) FROM procurewizard_rows WHERE product_id = ?) AS pw_count
+            """,
+            (product_id, product_id),
+        ).fetchone()
+        if dependency and (dependency["line_count"] or dependency["pw_count"]):
+            raise HTTPException(status_code=400, detail="Product has stocktake history or ProcureWizard links. Merge or edit it instead.")
         audit_product_change(db, product_id, "delete_product", before, None)
         res = db.execute("DELETE FROM products WHERE id = ?", (product_id,))
         db.commit()
@@ -769,6 +780,21 @@ def admin_bulk_delete_products(
     query = f"DELETE FROM products WHERE id IN ({','.join(['?'] * len(payload.product_ids))})"
     
     with get_db() as db:
+        placeholders = ",".join("?" for _ in payload.product_ids)
+        blocked = db.execute(
+            f"""
+            SELECT id FROM products
+            WHERE id IN ({placeholders})
+              AND (
+                EXISTS (SELECT 1 FROM stocktake_lines WHERE stocktake_lines.product_id = products.id)
+                OR EXISTS (SELECT 1 FROM procurewizard_rows WHERE procurewizard_rows.product_id = products.id)
+              )
+            """,
+            payload.product_ids,
+        ).fetchall()
+        if blocked:
+            ids = ", ".join(row["id"] for row in blocked[:5])
+            raise HTTPException(status_code=400, detail=f"Cannot delete products with stocktake history or ProcureWizard links: {ids}")
         db.execute(query, payload.product_ids)
         db.commit()
     return {"status": "ok", "deleted_count": len(payload.product_ids)}

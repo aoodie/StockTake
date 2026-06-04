@@ -475,12 +475,18 @@ label {
 }
 .ai-field-row {
   display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
+  grid-template-columns: 18px 110px minmax(0, 1fr);
   gap: 12px;
+  align-items: start;
   padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
+}
+.ai-field-row input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
 }
 .ai-field-row span {
   color: var(--text-muted);

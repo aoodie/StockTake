@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101820">
     <title>StockTake Mapping</title>
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=audit-1">
   </head>
   <body class="mapping-body">
     <main class="mapping-shell">
@@ -53,7 +53,7 @@
           <div class="mapping-panel-head">
             <div>
               <p class="mapping-kicker">Best matches</p>
-              <h2>Tap product to map</h2>
+              <h2>Choose product to confirm</h2>
             </div>
             <button id="mappingOpenSearch" class="mapping-secondary" type="button">Search all</button>
           </div>
@@ -78,6 +78,8 @@
           <div id="mappingProductResults" class="mapping-product-results"></div>
         </section>
 
+        <section id="mappingConfirmPanel" class="mapping-card mapping-panel mapping-confirm-panel hidden"></section>
+
         <section id="mappingCreatePanel" class="mapping-card mapping-panel hidden">
           <h2>Create draft product</h2>
           <form id="mappingCreateForm" class="mapping-create-form">
@@ -98,6 +100,6 @@
     </main>
 
     <script src="/vendor/zxing-library.min.js"></script>
-    <script src="/mapping.js?v=phone-mapping-3" type="module"></script>
+    <script src="/mapping.js?v=phone-mapping-4" type="module"></script>
   </body>
 </html>

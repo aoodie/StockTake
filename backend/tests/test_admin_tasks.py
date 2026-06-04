@@ -23,7 +23,7 @@ def test_mapping_page_is_served():
     client = TestClient(app)
     response = client.get("/mapping")
     assert response.status_code == 200
-    assert "mapping.js?v=phone-mapping-3" in response.text
+    assert "mapping.js?v=phone-mapping-4" in response.text
 
 
 def test_admin_page_loads_ai_copilot_bundle():
@@ -31,7 +31,7 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=ai-copilot-2" in response.text
+    assert "admin.js?v=audit-1" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -81,7 +81,7 @@ def test_draft_product_event_creates_admin_task(tmp_path, monkeypatch):
     assert task["draft_product_id"] == "draft-12345"
 
 
-def test_draft_product_event_auto_enriches_and_prefills_draft(tmp_path, monkeypatch):
+def test_draft_product_event_auto_enriches_task_without_mutating_draft(tmp_path, monkeypatch):
     from app.routers import sync
 
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
@@ -133,11 +133,11 @@ def test_draft_product_event_auto_enriches_and_prefills_draft(tmp_path, monkeypa
 
     assert task["status"] == "review_needed"
     assert "Auto Filled Lager" in task["suggested_json"]
-    assert product["name"] == "Auto Filled Lager"
-    assert product["category"] == "Beer"
-    assert product["size"] == "330ml"
-    assert product["unit"] == "bottle"
-    assert product["photo_url"] == "https://example.test/lager.jpg"
+    assert product["name"] == "Draft 98765"
+    assert product["category"] == ""
+    assert product["size"] == ""
+    assert product["unit"] == "each"
+    assert product["photo_url"] is None
     assert product["draft_status"] == "draft"
 
 
@@ -441,6 +441,30 @@ def test_product_alias_issue_detail_and_merge_workflow(tmp_path, monkeypatch):
             """,
             (now,),
         )
+        db.execute(
+            """
+            INSERT INTO procurewizard_imports (
+                id, filename, encoding, metadata_json, header_json, row_count, active, created_at
+            )
+            VALUES ('pw-merge', 'pw.csv', 'text', '[]', '[]', 1, 1, ?)
+            """,
+            (now,),
+        )
+        db.execute(
+            """
+            INSERT INTO procurewizard_rows (
+                id, import_id, row_index, pid, bin_number, pos, category, description,
+                pack_size, est_fc, est_sc, close_fc, close_sc, raw_json, product_id,
+                match_status, match_score, match_reason, created_at, updated_at
+            )
+            VALUES (
+                'pw-merge-2', 'pw-merge', 2, 'PW222', 'PW222', '', 'Wine', 'House Merlot',
+                '75cl', '0', '0', '', '', '[]', 'product-222',
+                'manual', 1, 'manual test link', ?, ?
+            )
+            """,
+            (now, now),
+        )
         db.commit()
 
     merged = client.post(
@@ -456,6 +480,9 @@ def test_product_alias_issue_detail_and_merge_workflow(tmp_path, monkeypatch):
     assert {"111", "222", "case-111"}.issubset(barcodes)
     assert product["count_history"][0]["session_id"] == "session-a"
     assert any(row["action"] == "merge_target_received" for row in product["audit"])
+    with database.get_db() as db:
+        pw_row = db.execute("SELECT product_id FROM procurewizard_rows WHERE id = 'pw-merge-2'").fetchone()
+        assert pw_row["product_id"] == "product-111"
 
     assert client.get("/admin/api/products/product-222").status_code == 404
 
@@ -803,7 +830,13 @@ def test_ai_copilot_generates_and_applies_product_issue_suggestion(tmp_path, mon
     assert listed.status_code == 200
     assert listed.json()["suggestions"][0]["id"] == suggestion["id"]
 
-    applied = client.post(f"/admin/api/ai-suggestions/{suggestion['id']}/apply", json={})
+    empty_apply = client.post(f"/admin/api/ai-suggestions/{suggestion['id']}/apply", json={})
+    assert empty_apply.status_code == 422
+
+    applied = client.post(
+        f"/admin/api/ai-suggestions/{suggestion['id']}/apply",
+        json={"fields": ["name", "category", "size", "unit", "photo_url", "draft_status"]},
+    )
     assert applied.status_code == 200
     assert set(applied.json()["fields"]).issuperset({"name", "category", "size", "unit", "photo_url"})
 

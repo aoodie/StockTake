@@ -356,13 +356,14 @@ function renderAiSuggestions() {
     const reasons = item.reasons || [];
     const sources = item.sources || [];
     const fieldRows = Object.entries(fields).map(([key, value]) => `
-      <div class="ai-field-row">
+      <label class="ai-field-row">
+        <input type="checkbox" data-ai-field="${escapeHtml(key)}" ${(key === "photo_url" || key === "draft_status") ? "" : "checked"}>
         <span>${escapeHtml(key.replaceAll("_", " "))}</span>
         <strong>${escapeHtml(value)}</strong>
-      </div>
+      </label>
     `).join("");
     return `
-      <article class="ai-card">
+      <article class="ai-card" data-ai-card="${escapeHtml(item.id)}">
         <div class="ai-card-head">
           <div>
             <h3>${escapeHtml(item.title || item.target_id || "AI suggestion")}</h3>
@@ -491,11 +492,17 @@ async function generateSuggestionForProduct(productId, force = false) {
 async function applyAiSuggestion(id) {
   const item = state.aiSuggestions.find((suggestion) => suggestion.id === id);
   if (!item) return;
-  if (!(await confirmDialog("Apply AI fields", `Apply suggested fields to ${item.title || item.target_id}?`, "Apply"))) return;
+  const card = [...document.querySelectorAll("[data-ai-card]")].find((node) => node.dataset.aiCard === id);
+  const fields = [...(card?.querySelectorAll("[data-ai-field]:checked") || [])].map((input) => input.dataset.aiField);
+  if (!fields.length) {
+    showToast("Select at least one AI field to apply.", "error");
+    return;
+  }
+  if (!(await confirmDialog("Apply AI fields", `Apply ${fields.length} selected field(s) to ${item.title || item.target_id}?`, "Apply"))) return;
   try {
     const result = await api(`/admin/api/ai-suggestions/${encodeURIComponent(id)}/apply`, {
       method: "POST",
-      body: JSON.stringify({})
+      body: JSON.stringify({ fields })
     });
     showToast(`Applied ${result.fields?.length || 0} fields`);
     await hydrate();

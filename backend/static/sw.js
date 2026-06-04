@@ -1,16 +1,16 @@
-const CACHE_NAME = "stocktake-v12";
+const CACHE_NAME = "stocktake-v13";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/mapping",
   "/mapping.html",
-  "/styles.css",
-  "/app.js?v=scanner-camera-1",
-  "/mapping.js?v=phone-mapping-3",
-  "/frontend-utils.js?v=scanner-camera-1",
-  "/frontend-utils.js?v=phone-mapping-3",
+  "/styles.css?v=audit-1",
+  "/app.js?v=audit-1",
+  "/mapping.js?v=phone-mapping-4",
+  "/frontend-utils.js?v=audit-1",
+  "/frontend-utils.js?v=phone-mapping-4",
   "/manifest.webmanifest",
-  "/vendor/zxing-library.min.js?v=scanner-camera-1"
+  "/vendor/zxing-library.min.js?v=audit-1"
 ];
 
 self.addEventListener("install", (event) => {
@@ -48,10 +48,19 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(event.request)
       .then((response) => {
+        if (!response || !response.ok || response.type === "opaque") return response;
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/")))
+      .catch(() => caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        if (event.request.mode === "navigate") return caches.match("/");
+        return new Response("Offline asset unavailable", {
+          status: 503,
+          statusText: "Service Unavailable",
+          headers: { "Content-Type": "text/plain" }
+        });
+      }))
   );
 });

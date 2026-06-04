@@ -4,6 +4,7 @@ from app import database
 from app.services.procurewizard import (
     build_procurewizard_csv,
     import_procurewizard_csv,
+    link_procurewizard_row,
     parse_procurewizard_csv_bytes,
 )
 
@@ -63,3 +64,34 @@ def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tm
     assert "21041,928291,<-- Do not delete or edit" in exported
     assert "3862551,3862551,0,Bourbon / American Whiskey,Jack Daniels Rye,1 x 70 cl [1],0,0,,11.5" in exported
     assert "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6],0,0,," in exported
+
+
+def test_manual_procurewizard_link_persists_as_pid_alias_across_reimport(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, bin, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('product-real-jd', '5010327001234', 'W-01', 'Jack Daniels Rye Real', 'Whiskey', '70cl', 'bottle', 'confirmed', ?)
+            """,
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        result = import_procurewizard_csv(db, "pw.csv", sample_csv())
+        row_id = f"{result['import_id']}-2"
+        linked = link_procurewizard_row(db, row_id, "product-real-jd")
+        assert linked["status"] == "linked"
+
+    with database.get_db() as db:
+        alias = db.execute("SELECT product_id, label FROM product_barcodes WHERE barcode = '3862551'").fetchone()
+        assert alias["product_id"] == "product-real-jd"
+        assert alias["label"] == "ProcureWizard PID"
+        second = import_procurewizard_csv(db, "pw2.csv", sample_csv())
+        row = db.execute(
+            "SELECT product_id, match_reason FROM procurewizard_rows WHERE import_id = ? AND pid = '3862551'",
+            (second["import_id"],),
+        ).fetchone()
+        assert row["product_id"] == "product-real-jd"
+        assert row["match_reason"] == "pid/barcode match"

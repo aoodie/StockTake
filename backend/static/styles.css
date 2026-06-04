@@ -668,6 +668,42 @@ dialog {
   color: #94a3b8;
   font-size: 12px;
 }
+.mapping-confirm-panel {
+  border-color: #14b8a6;
+}
+.mapping-confirm-product {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+.mapping-confirm-product img,
+.mapping-confirm-product .mapping-photo-empty {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  background: #1f2937;
+  object-fit: contain;
+}
+.mapping-confirm-product p,
+.mapping-confirm-product small {
+  display: block;
+  margin: 4px 0 0;
+  color: #cbd5e1;
+}
+.mapping-confirm-product small {
+  color: #94a3b8;
+  font-size: 12px;
+}
+.mapping-confirm-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+.mapping-confirm-actions button {
+  min-height: 48px;
+}
 .mapping-no-results {
   display: grid;
   gap: 10px;

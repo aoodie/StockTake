@@ -103,12 +103,12 @@ def product_id_for_pid(pid: str) -> str:
 
 
 def existing_product_for_pid(db: Connection, pid: str) -> str | None:
-    row = db.execute("SELECT id FROM products WHERE id = ?", (product_id_for_pid(pid),)).fetchone()
-    if row:
-        return row["id"]
     alias = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (pid,)).fetchone()
     if alias:
         return alias["product_id"]
+    row = db.execute("SELECT id FROM products WHERE id = ?", (product_id_for_pid(pid),)).fetchone()
+    if row:
+        return row["id"]
     product = db.execute("SELECT id FROM products WHERE barcode = ?", (pid,)).fetchone()
     return product["id"] if product else None
 
@@ -304,10 +304,17 @@ def import_summary(db: Connection) -> dict[str, Any]:
 
 def link_procurewizard_row(db: Connection, row_id: str, product_id: str | None) -> dict[str, Any]:
     current = now_iso()
+    row = db.execute("SELECT pid, product_id FROM procurewizard_rows WHERE id = ?", (row_id,)).fetchone()
+    if not row:
+        raise ValueError("ProcureWizard row not found")
     if product_id:
         product = db.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
         if not product:
             raise ValueError("Product not found")
+        owner = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (row["pid"],)).fetchone()
+        owner_is_generated_pw = bool(owner and owner["product_id"] == row["product_id"] and str(owner["product_id"]).startswith("procurewizard-"))
+        if owner and owner["product_id"] != product_id and not owner_is_generated_pw:
+            raise ValueError("ProcureWizard PID already belongs to another product")
     result = db.execute(
         """
         UPDATE procurewizard_rows
@@ -325,6 +332,18 @@ def link_procurewizard_row(db: Connection, row_id: str, product_id: str | None) 
     )
     if result.rowcount == 0:
         raise ValueError("ProcureWizard row not found")
+    if product_id:
+        db.execute(
+            """
+            INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
+            VALUES (?, ?, 'ProcureWizard PID', 0, ?)
+            ON CONFLICT(barcode) DO UPDATE SET
+                product_id = excluded.product_id,
+                is_primary = 0,
+                label = 'ProcureWizard PID'
+            """,
+            (row["pid"], product_id, current),
+        )
     db.commit()
     return {"row_id": row_id, "product_id": product_id, "status": "linked" if product_id else "unlinked"}
 

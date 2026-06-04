@@ -1,6 +1,8 @@
 import os
 import json
+import ipaddress
 import re
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
@@ -10,6 +12,7 @@ from ..database import DATA_DIR, get_db, get_setting, now_iso
 IMAGE_DIR = Path(__file__).resolve().parents[2] / "data" / "product-images"
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY_FILE = DATA_DIR / "openai_api_key.txt"
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 def openai_model() -> str:
     return get_setting("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
@@ -386,21 +389,55 @@ def image_extension(url: str, content_type: str) -> str:
         return ".webp"
     return ".jpg"
 
+def image_url_allowed(image_url: str) -> bool:
+    parsed = urlparse(image_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast:
+            return False
+    return True
+
 def save_product_image(product_id: str, image_url: str) -> str | None:
-    if not image_url:
+    if not image_url or not image_url_allowed(image_url):
         return None
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        with httpx.Client(timeout=15, follow_redirects=True) as client:
-            response = client.get(image_url)
+        url = image_url
+        with httpx.Client(timeout=15, follow_redirects=False) as client:
+            response = None
+            for _ in range(4):
+                if not image_url_allowed(url):
+                    return None
+                response = client.get(url)
+                if response.status_code in {301, 302, 303, 307, 308} and response.headers.get("location"):
+                    url = str(response.url.join(response.headers["location"]))
+                    continue
+                break
+            if response is None:
+                return None
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
             if not content_type.startswith("image/"):
                 return None
-            ext = image_extension(image_url, content_type)
+            content_length = int(response.headers.get("content-length") or "0")
+            if content_length > MAX_IMAGE_BYTES:
+                return None
+            content = response.content
+            if len(content) > MAX_IMAGE_BYTES:
+                return None
+            ext = image_extension(url, content_type)
             safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", product_id)
             path = IMAGE_DIR / f"{safe_id}{ext}"
-            path.write_bytes(response.content)
+            path.write_bytes(content)
             return f"/product-images/{path.name}"
     except Exception:
         return None
