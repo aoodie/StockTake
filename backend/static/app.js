@@ -12,7 +12,7 @@ import {
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity
-} from "./frontend-utils.js?v=audit-1";
+} from "./frontend-utils.js?v=scanner-zxing-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -1183,11 +1183,11 @@ async function startScanLoop() {
   state.decoderGeneration += 1;
   const generation = state.decoderGeneration;
   state.scanLoopActive = true;
-  const nativeStarted = await startNativeScanLoop(generation);
-  const zxingStarted = nativeStarted ? false : await startZxingScanLoop(generation);
+  const zxingStarted = await startZxingScanLoop(generation);
+  const nativeStarted = zxingStarted ? false : await startNativeScanLoop(generation);
 
   if (nativeStarted || zxingStarted) {
-    const decoders = nativeStarted ? "Native" : "ZXing ROI";
+    const decoders = zxingStarted ? "ZXing ROI" : "Native";
     state.activeDecoder = decoders;
     updateDiagnostics({ decoder_mode: decoders });
     setSyncStatus(`Fast scan: ${decoders}`);
@@ -1213,7 +1213,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=audit-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-zxing-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
