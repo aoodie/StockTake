@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-controlled-1";
+} from "./frontend-utils.js?v=scanner-ui-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -578,7 +578,7 @@ function showScanHud(product, quantity, total, variant = "success") {
   els.scanHud.className = `scan-hud ${isDraft ? "draft" : ""} ${variant === "error" ? "error" : ""}`;
   els.scanHud.innerHTML = `
     ${photo}
-    <span>
+    <span class="hud-info">
       <strong>${escapeHtml(product?.name || "Scan failed")}</strong>
       <small>${escapeHtml(product ? productSubtitle(product) : "Try again")}</small>
       <small>${escapeHtml(product?.barcode || "")}</small>
@@ -1272,7 +1272,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-controlled-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-ui-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();

@@ -6,7 +6,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: #07090c; }
+body { margin: 0; min-height: 100vh; min-height: 100dvh; background: #07090c; }
 body.feedback-success { animation: success-flash 220ms ease-out; }
 body.feedback-error { animation: error-flash 320ms ease-out; }
 button, input, select { font: inherit; }
@@ -37,8 +37,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 
 .app-shell {
   width: min(760px, 100%);
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
-  padding: 12px;
+  padding:
+    calc(12px + env(safe-area-inset-top))
+    calc(12px + env(safe-area-inset-right))
+    calc(12px + env(safe-area-inset-bottom))
+    calc(12px + env(safe-area-inset-left));
   display: grid;
   gap: 12px;
 }
@@ -134,6 +140,9 @@ video { width: 100%; height: 100%; object-fit: cover; }
   bottom: 12px;
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "photo info quantity"
+    "photo info action";
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -148,11 +157,16 @@ video { width: 100%; height: 100%; object-fit: cover; }
 .scan-hud.error { border-color: #f87171; }
 .scan-hud img,
 .scan-hud .hud-photo {
+  grid-area: photo;
   width: 58px;
   height: 58px;
   border-radius: 8px;
   object-fit: cover;
   background: #1f2937;
+}
+.scan-hud .hud-info {
+  grid-area: info;
+  min-width: 0;
 }
 .scan-hud strong,
 .scan-hud span,
@@ -169,11 +183,13 @@ video { width: 100%; height: 100%; object-fit: cover; }
   color: #cbd5e1;
 }
 .scan-hud .hud-qty {
+  grid-area: quantity;
   font-size: 28px;
   font-weight: 900;
   color: #bbf7d0;
 }
 .scan-hud button {
+  grid-area: action;
   min-height: 34px;
   padding: 0 10px;
   background: #f59e0b;
@@ -753,7 +769,14 @@ dialog {
 }
 
 @media (max-width: 560px) {
-  .app-shell { gap: 8px; padding: 10px; }
+  .app-shell {
+    gap: 8px;
+    padding:
+      calc(10px + env(safe-area-inset-top))
+      calc(10px + env(safe-area-inset-right))
+      calc(10px + env(safe-area-inset-bottom))
+      calc(10px + env(safe-area-inset-left));
+  }
   .topbar { grid-template-columns: 1fr 1fr; }
   .sync-pill { grid-column: 1 / -1; padding: 8px 10px; }
   button { min-height: 48px; }
@@ -771,10 +794,15 @@ dialog {
   .auto-scan-badge { top: 8px; left: 8px; padding: 8px 10px; }
   .icon-button { top: 8px; right: 8px; min-height: 44px; min-width: 68px; }
   .scan-hud {
-    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "photo info quantity"
+      "photo info action";
+    gap: 4px 8px;
     left: 8px;
     right: 8px;
     bottom: 8px;
+    padding: 8px;
   }
   .scan-hud img,
   .scan-hud .hud-photo {
@@ -782,8 +810,26 @@ dialog {
     height: 48px;
   }
   .scan-hud .hud-qty {
-    grid-column: 2;
-    font-size: 18px;
+    align-self: end;
+    font-size: 16px;
+    line-height: 1;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .scan-hud button {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .scan-hud strong {
+    font-size: 14px;
+  }
+  .scan-hud small {
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .pulse { left: 10px; right: 10px; bottom: 10px; padding: 10px; font-size: 18px; }
   .keypad { gap: 7px; }
@@ -814,6 +860,12 @@ dialog {
   }
   .mapping-recovery {
     grid-template-columns: 1fr 78px 88px;
+  }
+}
+
+@media (display-mode: standalone) and (max-width: 560px) {
+  .app-shell {
+    padding-top: max(calc(10px + env(safe-area-inset-top)), 58px);
   }
 }
 
