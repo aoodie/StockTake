@@ -21,6 +21,7 @@ from ..services.enrichment import (
     fetch_product_suggestion,
     openai_key_status,
     save_openai_api_key,
+    test_openai_connection,
 )
 from .admin import audit_product_change, product_issue_rows, product_snapshot, task_from_row
 
@@ -228,6 +229,15 @@ def admin_update_llm_settings(
         save_openai_api_key(api_key)
 
     return {"openai_model": model, "status": "saved", **openai_key_status()}
+
+@router.post("/admin/api/settings/llm/test")
+def admin_test_llm_settings(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
+    require_admin(_)
+    init_db()
+    result = test_openai_connection()
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return {**result, **openai_key_status()}
 
 
 @router.get("/admin/api/ai-suggestions")

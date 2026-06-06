@@ -113,7 +113,10 @@
                 <input id="clearOpenaiTokenInput" type="checkbox">
                 <span>Clear saved token</span>
               </label>
-              <button class="secondary" type="submit">Save Model</button>
+              <div class="llm-settings-actions">
+                <button id="testLlmSettingsButton" class="secondary" type="button">Test Connection</button>
+                <button class="accent-btn" type="submit">Save & Test</button>
+              </div>
               <p id="llmSettingsStatus" class="field-note"></p>
             </form>
             <div class="ai-principle">
@@ -358,6 +361,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=audit-1" type="module"></script>
+    <script src="/admin.js?v=llm-settings-2" type="module"></script>
   </body>
 </html>

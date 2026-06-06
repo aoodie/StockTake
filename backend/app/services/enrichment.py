@@ -4,7 +4,7 @@ import ipaddress
 import re
 import socket
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from typing import Any
 import httpx
 from ..database import DATA_DIR, get_db, get_setting, now_iso
@@ -39,6 +39,55 @@ def save_openai_api_key(api_key: str) -> None:
 def clear_openai_api_key() -> None:
     if OPENAI_API_KEY_FILE.exists():
         OPENAI_API_KEY_FILE.unlink()
+
+def _openai_error_detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    error = body.get("error") if isinstance(body, dict) else {}
+    if isinstance(error, dict):
+        message = str(error.get("message") or "").strip()
+        code = str(error.get("code") or error.get("type") or "").strip()
+        if message and code:
+            return f"{message} ({code})"
+        if message:
+            return message
+    return f"OpenAI returned HTTP {response.status_code}"
+
+def test_openai_connection() -> dict[str, str | bool]:
+    api_key = openai_api_key()
+    model = openai_model()
+    if not api_key:
+        return {
+            "ok": False,
+            "model": model,
+            "message": "No OpenAI token is configured.",
+        }
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(
+                f"https://api.openai.com/v1/models/{quote(model, safe='')}",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "model": model,
+            "message": f"Could not reach OpenAI: {exc.__class__.__name__}",
+        }
+    if response.status_code != 200:
+        return {
+            "ok": False,
+            "model": model,
+            "message": _openai_error_detail(response),
+        }
+    data = response.json()
+    return {
+        "ok": True,
+        "model": str(data.get("id") or model),
+        "message": f"Connected. Model {data.get('id') or model} is available.",
+    }
 
 def parse_open_food_facts(product: dict, barcode: str) -> dict:
     name = product.get("product_name") or product.get("generic_name") or f"Product {barcode}"

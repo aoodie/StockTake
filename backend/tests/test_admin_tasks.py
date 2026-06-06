@@ -31,7 +31,7 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=audit-1" in response.text
+    assert "admin.js?v=llm-settings-2" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -898,6 +898,7 @@ def test_ai_copilot_reject_keeps_catalog_unchanged(tmp_path, monkeypatch):
 
 
 def test_admin_can_change_openai_model_and_token_setting(tmp_path, monkeypatch):
+    from app.routers import ai
     from app.services import enrichment
 
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
@@ -914,6 +915,9 @@ def test_admin_can_change_openai_model_and_token_setting(tmp_path, monkeypatch):
     assert current.status_code == 200
     assert current.json()["openai_model"] == "gpt-env-default"
     assert current.json()["has_openai_key"] is False
+    missing_test = client.post("/admin/api/settings/llm/test", json={})
+    assert missing_test.status_code == 400
+    assert missing_test.json()["detail"] == "No OpenAI token is configured."
 
     saved = client.patch(
         "/admin/api/settings/llm",
@@ -925,6 +929,15 @@ def test_admin_can_change_openai_model_and_token_setting(tmp_path, monkeypatch):
     assert saved.json()["openai_key_source"] == "admin"
     assert enrichment.openai_model() == "gpt-4.1"
     assert enrichment.openai_api_key() == "sk-test-token-1234567890"
+    monkeypatch.setattr(
+        ai,
+        "test_openai_connection",
+        lambda: {"ok": True, "model": "gpt-4.1", "message": "Connected. Model gpt-4.1 is available."},
+    )
+    connected = client.post("/admin/api/settings/llm/test", json={})
+    assert connected.status_code == 200
+    assert connected.json()["ok"] is True
+    assert connected.json()["has_openai_key"] is True
 
     invalid = client.patch("/admin/api/settings/llm", json={"openai_model": "bad model name"})
     assert invalid.status_code == 400

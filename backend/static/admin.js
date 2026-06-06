@@ -46,6 +46,7 @@ const els = {
   openaiModelInput: document.querySelector("#openaiModelInput"),
   openaiTokenInput: document.querySelector("#openaiTokenInput"),
   clearOpenaiTokenInput: document.querySelector("#clearOpenaiTokenInput"),
+  testLlmSettingsButton: document.querySelector("#testLlmSettingsButton"),
   llmSettingsStatus: document.querySelector("#llmSettingsStatus"),
   productSearchForm: document.querySelector("#productSearchForm"),
   productSearch: document.querySelector("#productSearch"),
@@ -445,16 +446,40 @@ async function saveLlmSettings() {
     state.llmSettings = data;
     els.openaiTokenInput.value = "";
     els.clearOpenaiTokenInput.checked = false;
-    const keyText = data.has_openai_key
-      ? `Token configured (${data.openai_key_source}: ${data.openai_key_preview})`
-      : "No token";
-    els.llmSettingsStatus.textContent = `Saved. New AI requests will use ${data.openai_model}. ${keyText}.`;
-    els.llmSettingsStatus.classList.remove("error");
-    showToast(`OpenAI model set to ${data.openai_model}`);
+    if (!data.has_openai_key) {
+      els.llmSettingsStatus.textContent = `Saved model ${data.openai_model}, but no token is configured.`;
+      els.llmSettingsStatus.classList.add("error");
+      showToast("Model saved, but an OpenAI token is required.", "error");
+      return;
+    }
+    await testLlmSettings();
   } catch (err) {
     els.llmSettingsStatus.textContent = err.message;
     els.llmSettingsStatus.classList.add("error");
     showToast(err.message, "error");
+  }
+}
+
+async function testLlmSettings() {
+  els.testLlmSettingsButton.disabled = true;
+  els.llmSettingsStatus.textContent = "Testing saved token and model access...";
+  els.llmSettingsStatus.classList.remove("error");
+  try {
+    const data = await api("/admin/api/settings/llm/test", {
+      method: "POST",
+      body: "{}"
+    });
+    els.llmSettingsStatus.textContent = data.message;
+    els.llmSettingsStatus.classList.remove("error");
+    showToast(data.message);
+    return true;
+  } catch (err) {
+    els.llmSettingsStatus.textContent = `Connection failed: ${err.message}`;
+    els.llmSettingsStatus.classList.add("error");
+    showToast(err.message, "error");
+    return false;
+  } finally {
+    els.testLlmSettingsButton.disabled = false;
   }
 }
 
@@ -1234,6 +1259,7 @@ function bindEvents() {
     event.preventDefault();
     await saveLlmSettings();
   });
+  els.testLlmSettingsButton.addEventListener("click", testLlmSettings);
   els.aiSuggestionList.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
     if (!button) return;
