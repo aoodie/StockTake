@@ -39,6 +39,7 @@ test("decoded barcode text supports native and ZXing results", () => {
 test("scanner block reason reports only active blockers", () => {
   assert.equal(scannerBlockReason({ videoReady: 4 }), "");
   assert.equal(scannerBlockReason({ sleeping: true, videoReady: 4 }), "scanner sleeping");
+  assert.equal(scannerBlockReason({ awaitingNextScan: true, videoReady: 4 }), "waiting for next scan");
   assert.equal(scannerBlockReason({ videoReady: 1 }), "video not ready");
   assert.equal(
     scannerBlockReason({ videoReady: 4, mode: "bulk", pendingBarcode: "123" }),

@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-ui-1";
+} from "./frontend-utils.js?v=scanner-ui-2";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -198,7 +198,7 @@ let state = {
   sessionStarting: false,
   restoredSession: false,
   pendingUnknownProduct: null,
-  hudTimer: null,
+  awaitingNextScan: false,
   stream: null,
   scanLoopActive: false,
   inactivityTimer: null,
@@ -332,6 +332,7 @@ async function restoreState() {
       lastManualScanAt: 0,
       sleeping: false,
       pendingUnknownProduct: null,
+      awaitingNextScan: false,
       scanInFlight: false,
       scanLoopActive: false
     };
@@ -570,7 +571,6 @@ function productSubtitle(product) {
 }
 
 function showScanHud(product, quantity, total, variant = "success") {
-  clearTimeout(state.hudTimer);
   const isDraft = product?.draft_status === "draft";
   const photo = product?.photo_url
     ? `<img alt="" src="${escapeHtml(product.photo_url)}">`
@@ -584,12 +584,20 @@ function showScanHud(product, quantity, total, variant = "success") {
       <small>${escapeHtml(product?.barcode || "")}</small>
     </span>
     <span class="hud-qty">+${escapeHtml(quantity)} / ${escapeHtml(total)}</span>
-    ${isDraft ? `<button data-action="describe-unknown" type="button">Describe</button>` : ""}
+    <div class="hud-actions">
+      ${isDraft ? `<button class="hud-describe" data-action="describe-unknown" type="button">Describe</button>` : ""}
+      <button class="hud-next" data-action="next-scan" type="button">${variant === "error" ? "Try Again" : "Next Scan"}</button>
+    </div>
   `;
+  state.awaitingNextScan = true;
   els.scanHud.classList.remove("hidden");
-  state.hudTimer = setTimeout(() => {
-    els.scanHud.classList.add("hidden");
-  }, isDraft ? 3200 : 1200);
+}
+
+function closeScanHud() {
+  state.awaitingNextScan = false;
+  els.scanHud.classList.add("hidden");
+  resetInactivityTimer();
+  updateDiagnostics({ decoder_blocked: "-" });
 }
 
 async function commitScanQuantity(product, quantity, { mergeDuplicate = false, reason = "Scan saved" } = {}) {
@@ -618,6 +626,10 @@ async function handleScan(barcode, options = {}) {
   }
   if (state.scanInFlight) {
     rejectScan("scan already processing");
+    return;
+  }
+  if (state.awaitingNextScan) {
+    rejectScan("waiting for next scan");
     return;
   }
   if (state.mode !== "multi" && state.pendingBarcode && !options.replacePending) {
@@ -1272,7 +1284,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-ui-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-ui-2";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1345,6 +1357,7 @@ function shouldSkipDecode() {
     sleeping: state.sleeping,
     sessionStarting: state.sessionStarting,
     scanInFlight: state.scanInFlight,
+    awaitingNextScan: state.awaitingNextScan,
     documentHidden: document.hidden,
     videoReady: els.preview.readyState,
     mode: state.mode,
@@ -1739,6 +1752,7 @@ function bindEvents() {
   els.scanHud.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (button?.dataset.action === "describe-unknown") openUnknownDescription();
+    if (button?.dataset.action === "next-scan") closeScanHud();
   });
   els.saveUnknownButton.addEventListener("click", saveUnknownDescription);
   els.unknownNameInput.addEventListener("keydown", (event) => {

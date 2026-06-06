@@ -1,5 +1,5 @@
 export const APP_VERSION = "2026.06.06.2";
-export const CACHE_NAME = "stocktake-v18";
+export const CACHE_NAME = "stocktake-v19";
 export const SCAN_DEBOUNCE_MS = 700;
 export const CAMERA_DETECT_INTERVAL_MS = 90;
 export const ZXING_DETECT_INTERVAL_MS = 130;
@@ -45,6 +45,7 @@ export function scannerBlockReason({
   sleeping = false,
   sessionStarting = false,
   scanInFlight = false,
+  awaitingNextScan = false,
   documentHidden = false,
   videoReady = 0,
   mode = "multi",
@@ -53,6 +54,7 @@ export function scannerBlockReason({
   if (sleeping) return "scanner sleeping";
   if (sessionStarting) return "session starting";
   if (scanInFlight) return "scan processing";
+  if (awaitingNextScan) return "waiting for next scan";
   if (documentHidden) return "page hidden";
   if (videoReady < 2) return "video not ready";
   if (mode !== "multi" && pendingBarcode) return "waiting for quantity";

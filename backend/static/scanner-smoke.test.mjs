@@ -13,9 +13,11 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for mobile HUD rollout", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-ui-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-ui-1/);
+test("scanner build cache is bumped for next-scan HUD rollout", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-ui-2/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-ui-2/);
+  assert.match(appSource, /data-action="next-scan"/);
+  assert.match(appSource, /state\.awaitingNextScan = true/);
 });
 
 test("IndexedDB state uses an explicit serializable allowlist", () => {
