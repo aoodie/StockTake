@@ -11,8 +11,9 @@ import {
   decodedBarcodeText,
   isValidQuantity,
   normalizeBarcode,
-  normalizeQuantity
-} from "./frontend-utils.js?v=scanner-owned-1";
+  normalizeQuantity,
+  scannerBlockReason
+} from "./frontend-utils.js?v=scanner-controlled-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -106,6 +107,7 @@ let diagnostics = {
   video_size: "-",
   preview_paused: "yes",
   decoder_mode: "none",
+  decoder_blocked: "-",
   zxing_loader: "checking",
   zxing_methods: "-",
   supported_formats: "-",
@@ -141,6 +143,7 @@ const DIAGNOSTIC_LABELS = {
   video_size: "Video Size",
   preview_paused: "Video Paused",
   decoder_mode: "Decoder",
+  decoder_blocked: "Decoder Blocked",
   zxing_loader: "ZXing Loader",
   zxing_methods: "ZXing Methods",
   supported_formats: "Formats",
@@ -302,16 +305,6 @@ async function saveState() {
     sessionName: state.sessionName,
     locationId: state.locationId,
     locationName: state.locationName,
-    quantity: state.quantity,
-    currentProduct: state.currentProduct,
-    pendingBarcode: state.pendingBarcode,
-    lastBarcode: state.lastBarcode,
-    lastScanAt: state.lastScanAt,
-    lastManualBarcode: state.lastManualBarcode,
-    lastManualScanAt: state.lastManualScanAt,
-    sleeping: state.sleeping,
-    restoredSession: state.restoredSession,
-    pendingUnknownProduct: state.pendingUnknownProduct,
     lastSyncAt: state.lastSyncAt,
     lastCatalogSyncAt: state.lastCatalogSyncAt
   };
@@ -330,6 +323,15 @@ async function restoreState() {
       zxingControls: null,
       zxingLoadPromise: null,
       cameraStartPromise: null,
+      quantity: "",
+      currentProduct: null,
+      pendingBarcode: "",
+      lastBarcode: null,
+      lastScanAt: 0,
+      lastManualBarcode: null,
+      lastManualScanAt: 0,
+      sleeping: false,
+      pendingUnknownProduct: null,
       scanInFlight: false,
       scanLoopActive: false
     };
@@ -1163,14 +1165,16 @@ async function startCamera() {
     return;
   }
   stopAutoScan();
-  updateDiagnostics({ camera_stream: "opening", camera_owner: "none", decoder_mode: "none", last_error: "-" });
-  const zxingOwnedStarted = await startZxingCameraLoop();
-  if (zxingOwnedStarted) {
-    setSyncStatus("Fast scan: ZXing camera");
-    setAutoScan(true);
-    return;
-  }
-  updateDiagnostics({ camera_stream: "opening fallback", camera_owner: "browser stream" });
+  state.sleeping = false;
+  els.scannerPanel.classList.remove("sleep");
+  els.wakeButton.classList.add("hidden");
+  updateDiagnostics({
+    camera_stream: "opening",
+    camera_owner: "browser stream",
+    decoder_mode: "none",
+    decoder_blocked: "-",
+    last_error: "-"
+  });
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -1204,7 +1208,7 @@ async function startCamera() {
   updateDiagnostics(videoDiagnostics());
   setSyncStatus("Auto scan running");
   setAutoScan(true);
-  startScanLoop();
+  await startScanLoop();
 }
 
 function reportCameraError(error) {
@@ -1219,7 +1223,11 @@ function reportCameraError(error) {
 
 function ensureCameraStarted() {
   if (state.stream?.active && els.preview.srcObject) {
+    state.sleeping = false;
+    els.scannerPanel.classList.remove("sleep");
+    els.wakeButton.classList.add("hidden");
     updateDiagnostics(videoDiagnostics());
+    if (!state.scanLoopActive) return startScanLoop();
     return Promise.resolve();
   }
   if (state.cameraStartPromise) return state.cameraStartPromise;
@@ -1264,7 +1272,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-owned-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-controlled-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1290,9 +1298,8 @@ function loadZxingScript() {
 
 function zxingMethodSummary(reader) {
   return [
-    typeof reader.decodeFromConstraints === "function" ? "constraints" : "",
-    typeof reader.decodeFromVideoDevice === "function" ? "device" : "",
-    typeof reader.decodeFromVideoElementContinuously === "function" ? "video-continuous" : ""
+    typeof reader.decode === "function" ? "direct-video" : "",
+    typeof reader.decodeFromVideoElementContinuously === "function" ? "library-continuous" : ""
   ].filter(Boolean).join(", ") || "none";
 }
 
@@ -1309,104 +1316,17 @@ function makeZxingReader(zxing) {
   return reader;
 }
 
-function zxingCameraAttempts() {
-  return [
-    {
-      name: "environment 1280x720",
-      constraints: {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      }
-    },
-    {
-      name: "environment 960x540",
-      constraints: {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 960 },
-          height: { ideal: 540 }
-        },
-        audio: false
-      }
-    },
-    {
-      name: "environment",
-      constraints: {
-        video: { facingMode: "environment" },
-        audio: false
-      }
-    },
-    {
-      name: "default",
-      constraints: {
-        video: true,
-        audio: false
-      }
-    }
-  ];
-}
-
-async function startZxingCameraLoop() {
-  const zxing = await loadZxingScript().catch(() => null);
-  if (!zxing?.BrowserMultiFormatReader) return false;
-  const generation = state.decoderGeneration + 1;
-  state.decoderGeneration = generation;
-  state.scanLoopActive = true;
-  state.activeDecoder = "ZXing camera";
-  updateDiagnostics({
-    decoder_mode: "ZXing camera starting",
-    scanner_generation: String(generation),
-    roi_size: "full video"
-  });
-
-  for (const attempt of zxingCameraAttempts()) {
-    if (generation !== state.decoderGeneration || !state.scanLoopActive) return false;
-    const reader = makeZxingReader(zxing);
-    if (typeof reader.decodeFromConstraints !== "function") {
-      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing constraints decoder unavailable" });
-      return false;
-    }
-    state.zxingReader = reader;
-    try {
-      updateDiagnostics({ camera_stream: `opening ${attempt.name}`, camera_owner: "ZXing constraints" });
-      await reader.decodeFromConstraints(attempt.constraints, els.preview, zxingDecodeCallback(reader, generation));
-      if (generation !== state.decoderGeneration || !state.scanLoopActive) return false;
-      state.stream = reader.stream || els.preview.srcObject || state.stream;
-      if (!state.stream?.active) {
-        throw new Error("ZXing camera did not attach active stream");
-      }
-      updateDiagnostics({
-        ...videoDiagnostics(),
-        camera_owner: `ZXing ${attempt.name}`,
-        decoder_mode: "ZXing camera",
-        decoder_heartbeat: "waiting for barcode"
-      });
-      return true;
-    } catch (error) {
-      reader.reset?.();
-      state.zxingReader = null;
-      updateDiagnostics({ last_error: `ZXing ${attempt.name}: ${error.name || error.message || "failed"}` });
-    }
-  }
-  state.scanLoopActive = false;
-  return false;
-}
-
 async function startZxingScanLoop(generation = state.decoderGeneration) {
   const zxing = await loadZxingScript().catch(() => null);
   if (generation !== state.decoderGeneration || !state.scanLoopActive) return false;
   if (zxing?.BrowserMultiFormatReader) {
     state.zxingReader = makeZxingReader(zxing);
-    if (typeof state.zxingReader.decodeFromVideoElementContinuously !== "function") {
-      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing video decoder unavailable" });
+    if (typeof state.zxingReader.decode !== "function") {
+      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing direct video decoder unavailable" });
       state.zxingReader = null;
       return false;
     }
-    runZxingVideoLoop(state.zxingReader, generation);
+    void runZxingVideoLoop(state.zxingReader, generation);
     return true;
   }
   return false;
@@ -1421,40 +1341,62 @@ function recordDecodeDuration(startedAt) {
 }
 
 function shouldSkipDecode() {
-  if (state.sleeping || state.sessionStarting || state.scanInFlight || document.hidden || els.preview.readyState < 2) return true;
-  return state.mode !== "multi" && Boolean(state.pendingBarcode);
+  const reason = scannerBlockReason({
+    sleeping: state.sleeping,
+    sessionStarting: state.sessionStarting,
+    scanInFlight: state.scanInFlight,
+    documentHidden: document.hidden,
+    videoReady: els.preview.readyState,
+    mode: state.mode,
+    pendingBarcode: state.pendingBarcode
+  });
+  updateDiagnostics({ decoder_blocked: reason || "-" });
+  return Boolean(reason);
 }
 
 function decoderIsCurrent(generation, decoder) {
   return state.scanLoopActive && generation === state.decoderGeneration && (!decoder || decoder === state.detector || decoder === state.zxingReader);
 }
 
-function zxingDecodeCallback(reader, generation) {
-  return (result, error) => {
-    if (!decoderIsCurrent(generation, reader)) return;
+function isExpectedZxingMiss(error) {
+  const zxing = currentZxing();
+  return [
+    zxing?.NotFoundException,
+    zxing?.ChecksumException,
+    zxing?.FormatException
+  ].some((ErrorType) => ErrorType && error instanceof ErrorType);
+}
+
+async function runZxingVideoLoop(reader, generation) {
+  updateDiagnostics({ roi_size: "full video", decoder_heartbeat: "starting controlled loop" });
+  while (decoderIsCurrent(generation, reader)) {
     if (shouldSkipDecode()) {
       state.framesSkipped += 1;
       updateDiagnostics({ frames_skipped: String(state.framesSkipped) });
-      return;
+    } else {
+      const startedAt = performance.now();
+      try {
+        const result = reader.decode(els.preview);
+        recordDecodeDuration(startedAt);
+        updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString(), decoder_blocked: "-" });
+        const barcode = decodedBarcodeText(result);
+        if (barcode) {
+          updateDiagnostics({ last_raw_barcode: barcode });
+          await handleScan(barcode);
+        }
+      } catch (error) {
+        updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
+        if (!isExpectedZxingMiss(error)) {
+          state.decodeErrors += 1;
+          updateDiagnostics({
+            decode_errors: String(state.decodeErrors),
+            last_error: `decode frame: ${error?.name || error?.message || "failed"}`
+          });
+        }
+      }
     }
-
-    updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
-    const barcode = decodedBarcodeText(result);
-    if (barcode) {
-      updateDiagnostics({ last_raw_barcode: barcode });
-      void handleScan(barcode);
-      return;
-    }
-    if (error && error.name !== "NotFoundException") {
-      state.decodeErrors += 1;
-      updateDiagnostics({ decode_errors: String(state.decodeErrors) });
-    }
-  };
-}
-
-function runZxingVideoLoop(reader, generation) {
-  updateDiagnostics({ roi_size: "full video" });
-  reader.decodeFromVideoElementContinuously(els.preview, zxingDecodeCallback(reader, generation));
+    await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
+  }
 }
 
 async function startNativeScanLoop(generation = state.decoderGeneration) {
@@ -1586,7 +1528,7 @@ function setSyncStatus(text) {
 
 function updateDiagnostics(patch) {
   diagnostics = { ...diagnostics, ...patch };
-  renderDiagnostics();
+  if (els.diagnosticsDialog?.open) renderDiagnostics();
 }
 
 function renderDiagnostics() {
@@ -1857,6 +1799,7 @@ function bindEvents() {
       return;
     }
     setAutoScan(true);
+    if (!state.scanLoopActive) startScanLoop();
   });
   els.exportButton.addEventListener("click", showExportReview);
   els.diagnosticsButton.addEventListener("click", () => {
@@ -1883,6 +1826,16 @@ function bindEvents() {
   window.addEventListener("online", () => {
     syncCatalog();
     syncEvents();
+  });
+  document.addEventListener("visibilitychange", () => {
+    updateDiagnostics({ visibility: document.visibilityState });
+    if (document.hidden || state.sleeping || els.sessionDialog.open) return;
+    if (!state.stream?.active) {
+      ensureCameraStarted().catch(reportCameraError);
+      return;
+    }
+    els.preview.play().catch(reportCameraError);
+    if (!state.scanLoopActive) startScanLoop();
   });
 }
 

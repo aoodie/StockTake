@@ -4,22 +4,25 @@ import assert from "node:assert/strict";
 
 const appSource = await readFile(new URL("./app.js", import.meta.url), "utf8");
 
-test("main scanner uses ZXing-owned camera with direct video fallback", () => {
-  assert.match(appSource, /decodeFromConstraints/);
-  assert.match(appSource, /startZxingCameraLoop/);
-  assert.match(appSource, /decodeFromVideoElementContinuously/);
+test("main scanner uses an app-controlled direct video decode loop", () => {
+  assert.match(appSource, /reader\.decode\(els\.preview\)/);
   assert.match(appSource, /runZxingVideoLoop/);
+  assert.doesNotMatch(appSource, /decodeFromConstraints/);
+  assert.doesNotMatch(appSource, /decodeFromVideoElementContinuously\(els\.preview/);
   assert.doesNotMatch(appSource, /decodeFromImageElement/);
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for owned camera rollout", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-owned-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-owned-1/);
+test("scanner build cache is bumped for controlled decoder rollout", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-controlled-1/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-controlled-1/);
 });
 
 test("IndexedDB state uses an explicit serializable allowlist", () => {
-  assert.match(appSource, /const persistent = \{/);
-  assert.match(appSource, /await put\("state", persistent\)/);
-  assert.doesNotMatch(appSource, /key: "active",\s+\.\.\.state/);
+  const saveStateSource = appSource.slice(appSource.indexOf("async function saveState"), appSource.indexOf("async function restoreState"));
+  assert.match(saveStateSource, /const persistent = \{/);
+  assert.match(saveStateSource, /await put\("state", persistent\)/);
+  assert.doesNotMatch(saveStateSource, /key: "active",\s+\.\.\.state/);
+  assert.doesNotMatch(saveStateSource, /sleeping: state\.sleeping/);
+  assert.doesNotMatch(saveStateSource, /pendingBarcode: state\.pendingBarcode/);
 });

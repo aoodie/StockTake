@@ -7,7 +7,8 @@ import {
   decodedBarcodeText,
   isValidQuantity,
   normalizeBarcode,
-  normalizeQuantity
+  normalizeQuantity,
+  scannerBlockReason
 } from "./frontend-utils.js";
 
 test("decimal quantities normalize and add without floating point drift", () => {
@@ -33,4 +34,14 @@ test("barcode helpers preserve leading zeros but add numeric lookup keys", () =>
 test("decoded barcode text supports native and ZXing results", () => {
   assert.equal(decodedBarcodeText({ rawValue: " 123 " }), "123");
   assert.equal(decodedBarcodeText({ getText: () => " 456 " }), "456");
+});
+
+test("scanner block reason reports only active blockers", () => {
+  assert.equal(scannerBlockReason({ videoReady: 4 }), "");
+  assert.equal(scannerBlockReason({ sleeping: true, videoReady: 4 }), "scanner sleeping");
+  assert.equal(scannerBlockReason({ videoReady: 1 }), "video not ready");
+  assert.equal(
+    scannerBlockReason({ videoReady: 4, mode: "bulk", pendingBarcode: "123" }),
+    "waiting for quantity"
+  );
 });

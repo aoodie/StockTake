@@ -1,5 +1,5 @@
-export const APP_VERSION = "2026.06.06.1";
-export const CACHE_NAME = "stocktake-v16";
+export const APP_VERSION = "2026.06.06.2";
+export const CACHE_NAME = "stocktake-v17";
 export const SCAN_DEBOUNCE_MS = 700;
 export const CAMERA_DETECT_INTERVAL_MS = 90;
 export const ZXING_DETECT_INTERVAL_MS = 130;
@@ -39,6 +39,24 @@ export function decodedBarcodeText(result) {
   if (!result) return "";
   if (typeof result.getText === "function") return normalizeBarcode(result.getText());
   return normalizeBarcode(result.rawValue || result.text || result.toString?.() || "");
+}
+
+export function scannerBlockReason({
+  sleeping = false,
+  sessionStarting = false,
+  scanInFlight = false,
+  documentHidden = false,
+  videoReady = 0,
+  mode = "multi",
+  pendingBarcode = ""
+} = {}) {
+  if (sleeping) return "scanner sleeping";
+  if (sessionStarting) return "session starting";
+  if (scanInFlight) return "scan processing";
+  if (documentHidden) return "page hidden";
+  if (videoReady < 2) return "video not ready";
+  if (mode !== "multi" && pendingBarcode) return "waiting for quantity";
+  return "";
 }
 
 export function normalizeQuantity(value) {
