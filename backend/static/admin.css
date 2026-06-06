@@ -403,34 +403,46 @@ label {
 
 .ai-toolbar {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(320px, 0.8fr) minmax(0, 1fr);
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
 }
 .llm-settings-form {
   display: grid;
-  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1fr) auto minmax(210px, auto);
-  gap: 8px;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(260px, 1.3fr) minmax(250px, auto);
+  gap: 10px 12px;
   align-items: end;
-  padding: 12px;
+  min-width: 0;
+  padding: 14px;
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.04);
 }
 .llm-settings-form .field-note {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
+  grid-row: 2;
+  align-self: center;
+  margin: 0;
 }
 .llm-settings-actions {
   display: flex;
   gap: 8px;
-  align-items: end;
+  align-items: stretch;
+  justify-content: flex-end;
+}
+.llm-settings-actions button {
+  min-width: 116px;
+  white-space: normal;
 }
 .llm-clear-row {
-  min-height: 40px;
-  align-self: end;
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 28px;
+  align-self: center;
   white-space: nowrap;
 }
 .ai-principle {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -447,6 +459,27 @@ label {
 .ai-principle span {
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+@media (max-width: 1250px) {
+  .ai-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .llm-settings-form {
+    grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1.3fr);
+  }
+  .llm-settings-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .llm-clear-row {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .llm-settings-form .field-note {
+    grid-column: 2;
+    grid-row: auto;
+  }
 }
 .ai-suggestion-list {
   display: grid;
@@ -1086,6 +1119,13 @@ dialog footer {
   .admin-shell {
     grid-template-columns: 1fr;
   }
+  .admin-shell,
+  .sidebar,
+  .workspace,
+  .view {
+    width: 100%;
+    min-width: 0;
+  }
   .sidebar {
     position: static;
     height: auto;
@@ -1098,6 +1138,7 @@ dialog footer {
   }
   .tabs {
     flex-direction: row;
+    max-width: 100%;
     margin-top: 16px;
     overflow-x: auto;
   }
@@ -1127,6 +1168,18 @@ dialog footer {
   }
   .llm-settings-form {
     grid-template-columns: 1fr;
+  }
+  .llm-settings-actions,
+  .llm-clear-row,
+  .llm-settings-form .field-note {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .llm-settings-actions {
+    flex-direction: column;
+  }
+  .llm-settings-actions button {
+    width: 100%;
   }
   .ai-actions {
     justify-content: stretch;
