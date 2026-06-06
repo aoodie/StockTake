@@ -440,6 +440,30 @@ def catalog() -> dict:
         "sessions": [dict(row) for row in sessions],
     }
 
+@router.get("/products/lookup/{barcode}")
+def scanner_lookup_product(barcode: str) -> dict:
+    init_db()
+    barcode = normalize_identifier(barcode)
+    if not barcode:
+        raise HTTPException(status_code=400, detail="Barcode is required")
+    codes = barcode_lookup_values(barcode)
+    placeholders = ",".join("?" for _ in codes)
+    with get_db() as db:
+        owner = db.execute(
+            f"""
+            SELECT p.id, p.barcode, p.bin, p.name, p.category, p.size, p.unit, p.photo_url,
+                   p.notes, p.draft_status, p.product_updated_at
+            FROM product_barcodes pb
+            JOIN products p ON p.id = pb.product_id
+            WHERE pb.barcode IN ({placeholders})
+            LIMIT 1
+            """,
+            codes,
+        ).fetchone()
+        if owner and owner["draft_status"] != "draft":
+            return {"barcode": barcode, "exists": True, "product": dict(owner), "suggested": {}}
+    return {"barcode": barcode, "exists": False, "suggested": fetch_product_suggestion(barcode)}
+
 @router.post("/products")
 def upsert_product(request: ProductUpsertRequest, _: None = Depends(require_admin)) -> dict:
     init_db()

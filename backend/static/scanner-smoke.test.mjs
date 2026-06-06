@@ -13,11 +13,12 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for next-scan HUD rollout", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-ui-2/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-ui-2/);
-  assert.match(appSource, /data-action="next-scan"/);
+test("scanner build cache is bumped for full-screen confirm rollout", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-confirm-1/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-confirm-1/);
+  assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
+  assert.match(appSource, /fetch\(`\/products\/lookup\//);
 });
 
 test("IndexedDB state uses an explicit serializable allowlist", () => {
@@ -27,4 +28,12 @@ test("IndexedDB state uses an explicit serializable allowlist", () => {
   assert.doesNotMatch(saveStateSource, /key: "active",\s+\.\.\.state/);
   assert.doesNotMatch(saveStateSource, /sleeping: state\.sleeping/);
   assert.doesNotMatch(saveStateSource, /pendingBarcode: state\.pendingBarcode/);
+});
+
+test("a scan is only committed from the full-screen quantity confirmation", () => {
+  const handleScanSource = appSource.slice(appSource.indexOf("async function handleScan"), appSource.indexOf("function rejectScan"));
+  assert.match(handleScanSource, /showScanHud\(product, state\.quantity, total\)/);
+  assert.doesNotMatch(handleScanSource, /commitScanQuantity/);
+  assert.match(appSource, /data-action="save-next"/);
+  assert.match(appSource, /if \(button\?\.dataset\.action === "save-next"\) confirmQuantity\(\)/);
 });

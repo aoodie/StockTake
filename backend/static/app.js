@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-ui-2";
+} from "./frontend-utils.js?v=scanner-confirm-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -199,6 +199,7 @@ let state = {
   restoredSession: false,
   pendingUnknownProduct: null,
   awaitingNextScan: false,
+  lookupGeneration: 0,
   stream: null,
   scanLoopActive: false,
   inactivityTimer: null,
@@ -333,6 +334,7 @@ async function restoreState() {
       sleeping: false,
       pendingUnknownProduct: null,
       awaitingNextScan: false,
+      lookupGeneration: state.lookupGeneration + 1,
       scanInFlight: false,
       scanLoopActive: false
     };
@@ -577,27 +579,110 @@ function showScanHud(product, quantity, total, variant = "success") {
     : `<span class="hud-photo"></span>`;
   els.scanHud.className = `scan-hud ${isDraft ? "draft" : ""} ${variant === "error" ? "error" : ""}`;
   els.scanHud.innerHTML = `
-    ${photo}
-    <span class="hud-info">
-      <strong>${escapeHtml(product?.name || "Scan failed")}</strong>
-      <small>${escapeHtml(product ? productSubtitle(product) : "Try again")}</small>
-      <small>${escapeHtml(product?.barcode || "")}</small>
-    </span>
-    <span class="hud-qty">+${escapeHtml(quantity)} / ${escapeHtml(total)}</span>
-    <div class="hud-actions">
-      ${isDraft ? `<button class="hud-describe" data-action="describe-unknown" type="button">Describe</button>` : ""}
-      <button class="hud-next" data-action="next-scan" type="button">${variant === "error" ? "Try Again" : "Next Scan"}</button>
+    <div class="hud-shell">
+      <header class="hud-header">
+        <span class="hud-kicker">${isDraft ? "Unknown barcode" : variant === "error" ? "Scan failed" : "Confirm count"}</span>
+        <span class="hud-current">Current total: ${escapeHtml(total)}</span>
+      </header>
+      <div class="hud-product">
+        <span data-role="hud-photo">${photo}</span>
+        <span class="hud-info">
+          <strong data-role="hud-name">${escapeHtml(product?.name || "Try scanning again")}</strong>
+          <small data-role="hud-meta">${escapeHtml(product ? productSubtitle(product) : "No product was found")}</small>
+          <small data-role="hud-barcode">${escapeHtml(product?.barcode || "")}</small>
+        </span>
+      </div>
+      ${product ? `
+        <div class="hud-lookup" data-role="lookup-status">${isDraft ? "Looking up product details and photo..." : "Product matched"}</div>
+        <label class="hud-quantity-label" for="hudQuantityInput">Quantity</label>
+        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="decimal" autocomplete="off" value="${escapeHtml(quantity || "1")}">
+        <div class="hud-quick" role="group" aria-label="Quick quantity">
+          <button data-action="set-quantity" data-value="1" type="button">1</button>
+          <button data-action="add-quantity" data-value="1" type="button">+1</button>
+          <button data-action="add-quantity" data-value="6" type="button">+6</button>
+          <button data-action="add-quantity" data-value="12" type="button">+12</button>
+          <button data-action="clear-quantity" type="button">Clear</button>
+        </div>
+      ` : ""}
+      <div class="hud-actions">
+        ${isDraft ? `<button class="hud-describe" data-action="describe-unknown" type="button">Describe</button>` : ""}
+        ${product ? `<button class="hud-skip" data-action="skip-scan" type="button">Skip</button>` : ""}
+        <button class="hud-next" data-action="${product ? "save-next" : "next-scan"}" type="button">${product ? "Save & Next" : "Try Again"}</button>
+      </div>
     </div>
   `;
   state.awaitingNextScan = true;
   els.scanHud.classList.remove("hidden");
+  requestAnimationFrame(() => els.scanHud.querySelector("#hudQuantityInput")?.select());
 }
 
-function closeScanHud() {
+function closeScanHud({ reset = false } = {}) {
+  state.lookupGeneration += 1;
   state.awaitingNextScan = false;
   els.scanHud.classList.add("hidden");
+  if (reset) resetActiveScan();
   resetInactivityTimer();
   updateDiagnostics({ decoder_blocked: "-" });
+}
+
+function usefulSuggestionName(suggestion, barcode) {
+  const name = normalizeBarcode(suggestion?.name);
+  return Boolean(name && ![`Product ${barcode}`, `Draft ${barcode}`].includes(name));
+}
+
+async function enrichUnknownProduct(product) {
+  const generation = ++state.lookupGeneration;
+  try {
+    const response = await fetch(`/products/lookup/${encodeURIComponent(product.barcode)}`);
+    if (!response.ok) throw new Error("Lookup failed");
+    const result = await response.json();
+    if (generation !== state.lookupGeneration || state.currentProduct?.barcode !== product.barcode) return;
+    let updated = product;
+    let status = "No confident online match. Saved for admin review.";
+    if (result.exists && result.product) {
+      updated = normalProduct(result.product);
+      status = "Matched an existing catalog product.";
+    } else {
+      const suggestion = result.suggested || {};
+      const hasName = usefulSuggestionName(suggestion, product.barcode);
+      updated = normalProduct({
+        ...product,
+        name: hasName ? suggestion.name : product.name,
+        category: suggestion.category || product.category,
+        size: suggestion.size || product.size,
+        unit: suggestion.unit || product.unit,
+        photo_url: suggestion.image_url || product.photo_url,
+        notes: [
+          product.notes,
+          hasName ? `Online suggestion: ${suggestion.name}` : "",
+          suggestion.confidence ? `Suggestion confidence: ${suggestion.confidence}` : ""
+        ].filter(Boolean).join("\n")
+      });
+      status = hasName
+        ? `Suggested from ${suggestion.source_name || "online lookup + AI"}${suggestion.confidence ? ` · ${Math.round(Number(suggestion.confidence) * 100)}% confidence` : ""}. Admin review required.`
+        : status;
+    }
+    await cacheProduct(updated);
+    state.currentProduct = updated;
+    state.pendingUnknownProduct = updated.draft_status === "draft" ? updated : null;
+    renderProduct(updated);
+    const name = els.scanHud.querySelector('[data-role="hud-name"]');
+    const meta = els.scanHud.querySelector('[data-role="hud-meta"]');
+    const photo = els.scanHud.querySelector('[data-role="hud-photo"]');
+    if (name) name.textContent = updated.name;
+    if (meta) meta.textContent = productSubtitle(updated);
+    if (photo) {
+      photo.innerHTML = updated.photo_url
+        ? `<img alt="" src="${escapeHtml(updated.photo_url)}">`
+        : `<span class="hud-photo"></span>`;
+    }
+    const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
+    if (lookup) lookup.textContent = status;
+  } catch {
+    if (generation !== state.lookupGeneration) return;
+    const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
+    if (lookup) lookup.textContent = "Lookup unavailable. Quantity can still be saved.";
+  }
 }
 
 async function commitScanQuantity(product, quantity, { mergeDuplicate = false, reason = "Scan saved" } = {}) {
@@ -648,7 +733,7 @@ async function handleScan(barcode, options = {}) {
   }
   state.lastBarcode = barcode;
   state.lastScanAt = now;
-  state.pendingBarcode = state.mode === "multi" ? "" : barcode;
+  state.pendingBarcode = barcode;
   state.scanInFlight = true;
   updateDiagnostics({
     last_accepted_barcode: barcode,
@@ -659,18 +744,14 @@ async function handleScan(barcode, options = {}) {
   try {
     const product = await getProduct(barcode);
     state.currentProduct = product;
-    state.quantity = "";
+    state.quantity = "1";
     renderProduct(product);
     renderQuantity();
-    if (state.mode === "multi") {
-      const total = await commitScanQuantity(product, "1", { mergeDuplicate: false });
-      showScanHud(product, "1", total);
-      pulse(`Saved\n${total}`);
-      if (product.draft_status === "draft") state.pendingUnknownProduct = product;
-      resetActiveScan({ keepProduct: true });
-    } else {
-      focusQuantity();
-      pulse("Scanned\nEnter quantity");
+    const total = await currentCount(product.barcode);
+    showScanHud(product, state.quantity, total);
+    if (product.draft_status === "draft") {
+      state.pendingUnknownProduct = product;
+      enrichUnknownProduct(product);
     }
     flashFeedback(product.draft_status === "draft" ? "error" : "success");
     vibrate(product.draft_status === "draft" ? [80, 50, 120] : 35);
@@ -857,20 +938,27 @@ async function confirmQuantity() {
   }
   const quantity = state.quantity || "1";
   if (!isValidQuantity(quantity)) {
-    els.quantityInput.classList.add("error");
+    (els.scanHud.querySelector("#hudQuantityInput") || els.quantityInput).classList.add("error");
     flashFeedback("error");
     vibrate([80, 50, 120]);
     return;
   }
+  if (state.scanInFlight) return;
+  state.scanInFlight = true;
+  const saveButton = els.scanHud.querySelector('[data-action="save-next"]');
+  if (saveButton) saveButton.disabled = true;
   const product = state.currentProduct;
   const existingLine = await findExistingLineForProduct(product);
   if (existingLine) {
     const duplicateAction = await showDuplicateDialog(existingLine, quantity);
     if (duplicateAction === "cancel") {
+      state.scanInFlight = false;
+      if (saveButton) saveButton.disabled = false;
       focusQuantity();
       return;
     }
     if (duplicateAction === "edit") {
+      closeScanHud();
       resetActiveScan();
       openLineEditor(existingLine);
       return;
@@ -881,9 +969,9 @@ async function confirmQuantity() {
     await addLine(product, quantity);
   }
   const count = await currentCount(product.barcode);
-  showScanHud(product, quantity, count);
   pulse(`Saved\nCurrent count: ${count}`);
   flashFeedback("success");
+  closeScanHud();
   resetActiveScan();
 }
 
@@ -1127,8 +1215,11 @@ function flashFeedback(kind) {
 function focusQuantity() {
   els.quantityInput.classList.remove("error");
   els.quantityInput.classList.add("pending");
-  els.quantityInput.focus();
-  els.quantityInput.select();
+  const input = state.awaitingNextScan
+    ? els.scanHud.querySelector("#hudQuantityInput") || els.quantityInput
+    : els.quantityInput;
+  input.focus();
+  input.select();
 }
 
 function beepOnce() {
@@ -1284,7 +1375,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-ui-2";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-confirm-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1753,6 +1844,40 @@ function bindEvents() {
     const button = event.target.closest("button");
     if (button?.dataset.action === "describe-unknown") openUnknownDescription();
     if (button?.dataset.action === "next-scan") closeScanHud();
+    if (button?.dataset.action === "skip-scan") closeScanHud({ reset: true });
+    if (button?.dataset.action === "save-next") confirmQuantity();
+    if (button?.dataset.action === "set-quantity") {
+      state.quantity = button.dataset.value || "1";
+      const input = els.scanHud.querySelector("#hudQuantityInput");
+      if (input) input.value = state.quantity;
+      renderQuantity();
+    }
+    if (button?.dataset.action === "add-quantity") {
+      state.quantity = addDecimalStrings(state.quantity || "0", button.dataset.value || "0");
+      const input = els.scanHud.querySelector("#hudQuantityInput");
+      if (input) input.value = state.quantity;
+      renderQuantity();
+    }
+    if (button?.dataset.action === "clear-quantity") {
+      state.quantity = "";
+      const input = els.scanHud.querySelector("#hudQuantityInput");
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+      renderQuantity();
+    }
+  });
+  els.scanHud.addEventListener("input", (event) => {
+    if (event.target.id !== "hudQuantityInput") return;
+    state.quantity = event.target.value.trim();
+    renderQuantity();
+  });
+  els.scanHud.addEventListener("keydown", (event) => {
+    if (event.target.id === "hudQuantityInput" && event.key === "Enter") {
+      event.preventDefault();
+      confirmQuantity();
+    }
   });
   els.saveUnknownButton.addEventListener("click", saveUnknownDescription);
   els.unknownNameInput.addEventListener("keydown", (event) => {

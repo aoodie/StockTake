@@ -247,3 +247,27 @@ def test_sync_rejects_invalid_quantities(tmp_path, monkeypatch):
     response = client.post("/sync/events", json={"events": [event]})
     assert response.status_code == 400
     assert "Quantity cannot be negative" in response.json()["detail"]
+
+
+def test_scanner_lookup_returns_enrichment_for_unknown_barcode(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setattr(
+        "app.routers.sync.fetch_product_suggestion",
+        lambda barcode: {
+            "barcode": barcode,
+            "name": "Suggested Bottle",
+            "category": "Spirits",
+            "size": "70cl",
+            "unit": "bottle",
+            "image_url": "https://example.com/bottle.jpg",
+            "confidence": 0.82,
+        },
+    )
+    client = TestClient(app)
+
+    response = client.get("/products/lookup/5012345678900")
+
+    assert response.status_code == 200
+    assert response.json()["exists"] is False
+    assert response.json()["suggested"]["name"] == "Suggested Bottle"
