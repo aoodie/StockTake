@@ -14,6 +14,7 @@ from ..models import (
 from ..auth import require_admin
 from ..exporter import build_stocktake_workbook
 from ..services.enrichment import fetch_product_suggestion
+from ..services.procurewizard import active_procurewizard_matches
 
 router = APIRouter()
 
@@ -462,7 +463,17 @@ def scanner_lookup_product(barcode: str) -> dict:
         ).fetchone()
         if owner and owner["draft_status"] != "draft":
             return {"barcode": barcode, "exists": True, "product": dict(owner), "suggested": {}}
-    return {"barcode": barcode, "exists": False, "suggested": fetch_product_suggestion(barcode)}
+    suggestion = fetch_product_suggestion(barcode)
+    with get_db() as db:
+        pw_matches = active_procurewizard_matches(
+            db,
+            {
+                "name": suggestion.get("name"),
+                "category": suggestion.get("category"),
+                "size": suggestion.get("size"),
+            },
+        )
+    return {"barcode": barcode, "exists": False, "suggested": suggestion, "procurewizard_matches": pw_matches}
 
 @router.post("/products")
 def upsert_product(request: ProductUpsertRequest, _: None = Depends(require_admin)) -> dict:

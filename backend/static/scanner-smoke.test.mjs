@@ -14,11 +14,17 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
 });
 
 test("scanner build cache is bumped for full-screen confirm rollout", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-confirm-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-confirm-1/);
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-pw-match-1/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-pw-match-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);
+});
+
+test("unknown scan can choose a ProcureWizard match before saving", () => {
+  assert.match(appSource, /renderProcureWizardMatches/);
+  assert.match(appSource, /data-action="choose-pw"/);
+  assert.match(appSource, /Save & Next will map this barcode and count it against the PW row/);
 });
 
 test("IndexedDB state uses an explicit serializable allowlist", () => {

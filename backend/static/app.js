@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-confirm-1";
+} from "./frontend-utils.js?v=scanner-pw-match-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -200,6 +200,7 @@ let state = {
   pendingUnknownProduct: null,
   awaitingNextScan: false,
   lookupGeneration: 0,
+  procurewizardMatches: [],
   stream: null,
   scanLoopActive: false,
   inactivityTimer: null,
@@ -335,6 +336,7 @@ async function restoreState() {
       pendingUnknownProduct: null,
       awaitingNextScan: false,
       lookupGeneration: state.lookupGeneration + 1,
+      procurewizardMatches: [],
       scanInFlight: false,
       scanLoopActive: false
     };
@@ -582,7 +584,7 @@ function showScanHud(product, quantity, total, variant = "success") {
     <div class="hud-shell">
       <header class="hud-header">
         <span class="hud-kicker">${isDraft ? "Unknown barcode" : variant === "error" ? "Scan failed" : "Confirm count"}</span>
-        <span class="hud-current">Current total: ${escapeHtml(total)}</span>
+        <span class="hud-current" data-role="hud-current">Current total: ${escapeHtml(total)}</span>
       </header>
       <div class="hud-product">
         <span data-role="hud-photo">${photo}</span>
@@ -628,6 +630,58 @@ function closeScanHud({ reset = false } = {}) {
 function usefulSuggestionName(suggestion, barcode) {
   const name = normalizeBarcode(suggestion?.name);
   return Boolean(name && ![`Product ${barcode}`, `Draft ${barcode}`].includes(name));
+}
+
+function renderProcureWizardMatches(matches = []) {
+  state.procurewizardMatches = matches;
+  const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
+  if (!lookup || !matches.length) return;
+  lookup.innerHTML = `
+    <strong>Possible ProcureWizard match${matches.length === 1 ? "" : "es"}</strong>
+    <span>Choose one to count directly against the PW product.</span>
+    <div class="hud-pw-matches">
+      ${matches.map((match, index) => `
+        <button data-action="choose-pw" data-index="${index}" type="button">
+          <strong>${escapeHtml(match.description || match.product?.name || "PW product")}</strong>
+          <small>BIN ${escapeHtml(match.bin_number || "-")} · ${escapeHtml(match.pack_size || "-")} · ${Math.round(Number(match.score || 0) * 100)}% match</small>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+async function chooseProcureWizardMatch(index) {
+  const match = state.procurewizardMatches[index];
+  if (!match?.product || !state.pendingBarcode) return;
+  const product = normalProduct({
+    ...match.product,
+    barcode: state.pendingBarcode,
+    barcode_raw: match.product.barcode,
+    procurewizard: {
+      pid: match.pid,
+      bin_number: match.bin_number,
+      pos: match.pos,
+      pack_size: match.pack_size,
+      match_status: "phone_selected"
+    }
+  });
+  state.currentProduct = product;
+  state.pendingUnknownProduct = null;
+  renderProduct(product);
+  const name = els.scanHud.querySelector('[data-role="hud-name"]');
+  const meta = els.scanHud.querySelector('[data-role="hud-meta"]');
+  const photo = els.scanHud.querySelector('[data-role="hud-photo"]');
+  const current = els.scanHud.querySelector('[data-role="hud-current"]');
+  const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
+  if (name) name.textContent = product.name;
+  if (meta) meta.textContent = productSubtitle(product);
+  if (photo) {
+    photo.innerHTML = product.photo_url
+      ? `<img alt="" src="${escapeHtml(product.photo_url)}">`
+      : `<span class="hud-photo"></span>`;
+  }
+  if (current) current.textContent = `Current total: ${await currentProductCount(product)}`;
+  if (lookup) lookup.textContent = `ProcureWizard product selected · PID ${match.pid}. Save & Next will map this barcode and count it against the PW row.`;
 }
 
 async function enrichUnknownProduct(product) {
@@ -678,6 +732,7 @@ async function enrichUnknownProduct(product) {
     }
     const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
     if (lookup) lookup.textContent = status;
+    renderProcureWizardMatches(result.procurewizard_matches || []);
   } catch {
     if (generation !== state.lookupGeneration) return;
     const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
@@ -889,6 +944,13 @@ async function currentCount(barcode) {
     .reduce((sum, line) => addDecimalStrings(sum, line.quantity_decimal || "0"), "0");
 }
 
+async function currentProductCount(product) {
+  const rows = await scopedLines();
+  return rows
+    .filter((line) => line.product_id === product.id)
+    .reduce((sum, line) => addDecimalStrings(sum, line.quantity_decimal || "0"), "0");
+}
+
 async function scopedLines() {
   return (await all("lines"))
     .filter((line) => line.session_id === state.sessionId && line.location_id === state.locationId)
@@ -1037,7 +1099,7 @@ async function deleteLine(line) {
 async function findExistingLineForProduct(product) {
   const rows = await scopedLines();
   const lookupKeys = new Set(barcodeLookupKeys(product.barcode));
-  return rows.find((line) => barcodeLookupKeys(line.barcode).some((key) => lookupKeys.has(key)));
+  return rows.find((line) => line.product_id === product.id || barcodeLookupKeys(line.barcode).some((key) => lookupKeys.has(key)));
 }
 
 async function renderLines() {
@@ -1375,7 +1437,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-confirm-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-pw-match-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1867,6 +1929,7 @@ function bindEvents() {
       }
       renderQuantity();
     }
+    if (button?.dataset.action === "choose-pw") chooseProcureWizardMatch(Number(button.dataset.index));
   });
   els.scanHud.addEventListener("input", (event) => {
     if (event.target.id !== "hudQuantityInput") return;

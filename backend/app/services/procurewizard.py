@@ -141,6 +141,65 @@ def best_catalog_match(db: Connection, row: dict[str, str]) -> tuple[str | None,
     return None, best_score, best_reason
 
 
+def active_procurewizard_matches(
+    db: Connection,
+    product: dict[str, Any],
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    rows = db.execute(
+        """
+        SELECT pwr.id AS row_id, pwr.pid, pwr.bin_number, pwr.pos, pwr.category,
+               pwr.description, pwr.pack_size, pwr.product_id,
+               p.id, p.barcode, p.bin, p.name, p.category AS product_category,
+               p.size, p.unit, p.photo_url, p.notes, p.draft_status, p.product_updated_at
+        FROM procurewizard_rows pwr
+        JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
+        LEFT JOIN products p ON p.id = pwr.product_id
+        """
+    ).fetchall()
+    matches: list[dict[str, Any]] = []
+    for item in rows:
+        row = dict(item)
+        score, reason = product_match_score(
+            {
+                "description": row["description"],
+                "pack_size": row["pack_size"],
+                "category": row["category"],
+            },
+            product,
+        )
+        if score < 0.38 or not row["id"]:
+            continue
+        matches.append(
+            {
+                "row_id": row["row_id"],
+                "pid": row["pid"],
+                "bin_number": row["bin_number"],
+                "pos": row["pos"],
+                "category": row["category"],
+                "description": row["description"],
+                "pack_size": row["pack_size"],
+                "score": score,
+                "reason": reason,
+                "product": {
+                    "id": row["id"],
+                    "barcode": row["barcode"],
+                    "bin": row["bin"],
+                    "name": row["name"],
+                    "category": row["product_category"],
+                    "size": row["size"],
+                    "unit": row["unit"],
+                    "photo_url": row["photo_url"],
+                    "notes": row["notes"],
+                    "draft_status": row["draft_status"],
+                    "product_updated_at": row["product_updated_at"],
+                },
+            }
+        )
+    matches.sort(key=lambda match: match["score"], reverse=True)
+    return matches[: max(1, min(limit, 10))]
+
+
 def ensure_procurewizard_product(db: Connection, row: dict[str, str], current: str) -> str:
     product_id = product_id_for_pid(row["pid"])
     owner = existing_product_for_pid(db, row["pid"])

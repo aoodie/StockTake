@@ -271,3 +271,46 @@ def test_scanner_lookup_returns_enrichment_for_unknown_barcode(tmp_path, monkeyp
     assert response.status_code == 200
     assert response.json()["exists"] is False
     assert response.json()["suggested"]["name"] == "Suggested Bottle"
+
+
+def test_scanner_lookup_returns_procurewizard_matches(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setattr(
+        "app.routers.sync.fetch_product_suggestion",
+        lambda barcode: {"barcode": barcode, "name": "Grey Goose Vodka", "category": "Spirits", "size": "70cl"},
+    )
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO procurewizard_imports
+                (id, filename, encoding, metadata_json, header_json, row_count, active, created_at)
+            VALUES ('pw-active', 'pw.csv', 'utf-8', '[]', '[]', 1, 1, '2026-06-06')
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO products
+                (id, barcode, bin, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('procurewizard-100', '100', 'B-10', 'Grey Goose Vodka', 'Spirits', '70cl', 'case', 'confirmed', '2026-06-06')
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO procurewizard_rows
+                (id, import_id, row_index, pid, bin_number, pos, category, description, pack_size,
+                 raw_json, product_id, match_status, match_score, created_at, updated_at)
+            VALUES
+                ('pw-row-1', 'pw-active', 2, '100', 'B-10', '', 'Spirits', 'Grey Goose Vodka',
+                 '70cl', '[]', 'procurewizard-100', 'imported', 1, '2026-06-06', '2026-06-06')
+            """
+        )
+        db.commit()
+    client = TestClient(app)
+
+    response = client.get("/products/lookup/5012345678900")
+
+    assert response.status_code == 200
+    assert response.json()["procurewizard_matches"][0]["product"]["id"] == "procurewizard-100"
+    assert response.json()["procurewizard_matches"][0]["score"] >= 0.9
