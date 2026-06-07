@@ -622,3 +622,21 @@ def export_session(session_id: str, _: None = Depends(require_admin)) -> Respons
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="stocktake-{session_id}.xlsx"'},
     )
+
+@router.get("/export/scanned/{session_id}")
+def export_scanned_session(session_id: str) -> Response:
+    """Export every saved scan, including drafts, missing BINs, and unmapped products."""
+    init_db()
+    with get_db() as db:
+        count = db.execute(
+            "SELECT COUNT(*) AS count FROM stocktake_lines WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()["count"]
+        if count == 0:
+            raise HTTPException(status_code=404, detail="No scanned lines for session")
+        workbook = build_stocktake_workbook(db, session_id, prefer_scan_snapshots=True)
+    return Response(
+        workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="scanned-lines-{session_id}.xlsx"'},
+    )

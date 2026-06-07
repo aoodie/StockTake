@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-pw-match-1";
+} from "./frontend-utils.js?v=raw-export-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -89,6 +89,7 @@ const els = {
   exportDialog: document.querySelector("#exportDialog"),
   exportSummary: document.querySelector("#exportSummary"),
   missingBinList: document.querySelector("#missingBinList"),
+  downloadRawExportLink: document.querySelector("#downloadRawExportLink"),
   downloadExportLink: document.querySelector("#downloadExportLink")
 };
 
@@ -1437,7 +1438,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-pw-match-1";
+    script.src = "/vendor/zxing-library.min.js?v=raw-export-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1831,6 +1832,8 @@ async function processManualScan() {
 async function showExportReview() {
   await syncEvents();
   els.downloadExportLink.classList.add("hidden");
+  els.downloadRawExportLink.href = `/export/scanned/${encodeURIComponent(state.sessionId)}`;
+  els.downloadRawExportLink.classList.remove("hidden");
   els.missingBinList.innerHTML = "";
   try {
     const response = await fetch(`/pre-export/${encodeURIComponent(state.sessionId)}`);
@@ -1861,7 +1864,7 @@ async function showExportReview() {
     }
     els.exportDialog.showModal();
   } catch {
-    els.exportSummary.innerHTML = `<p>Export review is unavailable while offline.</p>`;
+    els.exportSummary.innerHTML = `<p>Export review is unavailable. Sync the phone before downloading scanned lines.</p>`;
     els.exportDialog.showModal();
   }
 }

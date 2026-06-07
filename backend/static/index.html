@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f172a">
     <title>StockTake</title>
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=scanner-pw-match-1">
+    <link rel="stylesheet" href="/styles.css?v=raw-export-1">
   </head>
   <body>
     <main class="app-shell">
@@ -172,11 +172,12 @@
         </header>
         <div id="exportSummary" class="export-summary"></div>
         <div id="missingBinList" class="missing-bin-list"></div>
-        <a id="downloadExportLink" class="download-button hidden" href="#">Download Excel</a>
+        <a id="downloadRawExportLink" class="download-button raw-export hidden" href="#">Download All Scanned Lines</a>
+        <a id="downloadExportLink" class="download-button hidden" href="#">Download Final Excel</a>
       </form>
     </dialog>
 
-    <script src="/vendor/zxing-library.min.js?v=scanner-pw-match-1"></script>
-    <script src="/app.js?v=scanner-pw-match-1" type="module"></script>
+    <script src="/vendor/zxing-library.min.js?v=raw-export-1"></script>
+    <script src="/app.js?v=raw-export-1" type="module"></script>
   </body>
 </html>

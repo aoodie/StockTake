@@ -26,7 +26,7 @@ EXPORT_COLUMNS = [
 ]
 
 
-def build_stocktake_workbook(db: Connection, session_id: str) -> bytes:
+def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_snapshots: bool = False) -> bytes:
     workbook = Workbook()
     stocktake = workbook.active
     stocktake.title = "Stocktake"
@@ -38,21 +38,25 @@ def build_stocktake_workbook(db: Connection, session_id: str) -> bytes:
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="E8EEF7")
 
+    bin_value = "COALESCE(sl.bin_snapshot, p.bin, '')" if prefer_scan_snapshots else "COALESCE(p.bin, sl.bin_snapshot, '')"
+    barcode_value = "COALESCE(sl.barcode_snapshot, p.barcode, '')" if prefer_scan_snapshots else "COALESCE(p.barcode, sl.barcode_snapshot, '')"
+    name_value = "COALESCE(sl.product_name_snapshot, p.name, '')" if prefer_scan_snapshots else "COALESCE(p.name, sl.product_name_snapshot, '')"
+    draft_value = "COALESCE(sl.draft_status, p.draft_status, 'confirmed')" if prefer_scan_snapshots else "COALESCE(p.draft_status, sl.draft_status, 'confirmed')"
     rows = db.execute(
-        """
+        f"""
         SELECT
             sl.session_id,
             COALESCE(s.name, sl.session_id) AS session_name,
             COALESCE(l.name, sl.location_id) AS location_name,
-            COALESCE(p.bin, sl.bin_snapshot, '') AS bin,
-            COALESCE(p.barcode, sl.barcode_snapshot, '') AS barcode,
-            COALESCE(p.name, sl.product_name_snapshot, '') AS product_name,
+            {bin_value} AS bin,
+            {barcode_value} AS barcode,
+            {name_value} AS product_name,
             COALESCE(p.category, '') AS category,
             COALESCE(p.size, '') AS size,
             sl.quantity_decimal,
             COALESCE(p.unit, 'each') AS unit,
-            COALESCE(p.draft_status, sl.draft_status, 'confirmed') AS draft_status,
-            CASE WHEN COALESCE(p.bin, sl.bin_snapshot, '') = '' THEN 'Y' ELSE 'N' END AS missing_bin,
+            {draft_value} AS draft_status,
+            CASE WHEN {bin_value} = '' THEN 'Y' ELSE 'N' END AS missing_bin,
             sl.counted_at,
             sl.device_id,
             COALESCE(sl.notes, '') AS notes
@@ -83,4 +87,3 @@ def build_stocktake_workbook(db: Connection, session_id: str) -> bytes:
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
-

@@ -535,6 +535,9 @@ dialog {
   font-weight: 900;
   text-decoration: none;
 }
+.download-button.raw-export {
+  background: #0f766e;
+}
 
 .mapping-body {
   background:

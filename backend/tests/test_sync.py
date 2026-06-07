@@ -314,3 +314,28 @@ def test_scanner_lookup_returns_procurewizard_matches(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["procurewizard_matches"][0]["product"]["id"] == "procurewizard-100"
     assert response.json()["procurewizard_matches"][0]["score"] >= 0.9
+
+
+def test_raw_scanned_export_includes_unmapped_draft_without_admin(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO stocktake_lines
+                (id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                 product_name_snapshot, quantity_decimal, draft_status, counted_at, device_id, notes)
+            VALUES
+                ('raw-line', 'raw-session', 'main-bar', NULL, '9990001112223', '',
+                 'Unmapped scanned product', '3', 'draft', '2026-06-07T10:00:00Z', 'phone-a', '')
+            """
+        )
+        db.commit()
+    client = TestClient(app)
+
+    response = client.get("/export/scanned/raw-session")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'attachment; filename="scanned-lines-raw-session.xlsx"'
+    assert len(response.content) > 1000

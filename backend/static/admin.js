@@ -928,7 +928,10 @@ async function loadExportReview(sessionId = els.exportSession.value) {
         <div class="metric"><span>Unresolved Drafts</span><strong>${escapeHtml(data.draft_count)}</strong></div>
       </div>
       <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
-        <a class="download-link ${ready ? "" : "disabled"}" href="/export/${encodeURIComponent(sessionId)}">Download Locked Excel Sheet</a>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <a class="download-link" href="/export/scanned/${encodeURIComponent(sessionId)}">Download All Scanned Lines</a>
+          <a class="download-link ${ready ? "" : "disabled"}" href="/export/${encodeURIComponent(sessionId)}">Download Locked Excel Sheet</a>
+        </div>
         <p class="meta">${ready ? "✅ Export is ready for locking." : "⚠️ Resolve missing BINs and draft details before final export."}</p>
       </div>
       <div class="task-list" style="margin-top:12px;">

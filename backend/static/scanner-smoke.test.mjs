@@ -13,12 +13,17 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for full-screen confirm rollout", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-pw-match-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-pw-match-1/);
+test("scanner build cache is bumped for raw export rollout", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=raw-export-1/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=raw-export-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);
+});
+
+test("phone export exposes all scanned lines without mapping", () => {
+  assert.match(appSource, /downloadRawExportLink/);
+  assert.match(appSource, /\/export\/scanned\//);
 });
 
 test("unknown scan can choose a ProcureWizard match before saving", () => {
