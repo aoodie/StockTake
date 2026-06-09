@@ -3,6 +3,7 @@ import json
 import ipaddress
 import re
 import socket
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlparse
 from typing import Any
@@ -13,7 +14,8 @@ IMAGE_DIR = Path(__file__).resolve().parents[2] / "data" / "product-images"
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY_FILE = DATA_DIR / "openai_api_key.txt"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
-LOOKUP_CACHE_VERSION = 2
+LOOKUP_CACHE_VERSION = 3
+NEGATIVE_LOOKUP_CACHE_SECONDS = 6 * 60 * 60
 OPEN_FACTS_SOURCES = (
     ("Open Food Facts", "https://world.openfoodfacts.org"),
     ("Open Products Facts", "https://world.openproductsfacts.org"),
@@ -256,9 +258,10 @@ def openai_web_search_product(barcode: str) -> dict:
         "model": openai_model(),
         "tools": [{"type": "web_search"}],
         "input": prompt,
+        "reasoning": {"effort": "low"},
     }
     try:
-        with httpx.Client(timeout=30) as client:
+        with httpx.Client(timeout=60) as client:
             response = client.post(
                 "https://api.openai.com/v1/responses",
                 headers={
@@ -295,6 +298,20 @@ def openai_web_search_product(barcode: str) -> dict:
         "lookup_cache_version": LOOKUP_CACHE_VERSION,
         "confidence": confidence,
     }
+
+def _cached_lookup_is_fresh(result: dict[str, Any], cached_at: str, barcode: str) -> bool:
+    if result.get("lookup_cache_version") != LOOKUP_CACHE_VERSION:
+        return False
+    if result.get("source_urls") or result.get("name") not in {"", f"Product {barcode}"}:
+        return True
+    try:
+        cached_time = datetime.fromisoformat(cached_at)
+        if cached_time.tzinfo is None:
+            cached_time = cached_time.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - cached_time).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age < NEGATIVE_LOOKUP_CACHE_SECONDS
 
 def _compact_sources(*items: Any) -> list[dict[str, str]]:
     sources: list[dict[str, str]] = []
@@ -463,13 +480,13 @@ def build_ai_product_suggestion(evidence: dict[str, Any]) -> dict[str, Any]:
 def fetch_product_suggestion(barcode: str) -> dict:
     with get_db() as db:
         cached = db.execute(
-            "SELECT suggested_json FROM product_lookup_cache WHERE barcode = ?",
+            "SELECT suggested_json, cached_at FROM product_lookup_cache WHERE barcode = ?",
             (barcode,)
         ).fetchone()
         if cached:
             try:
                 result = json.loads(cached["suggested_json"])
-                if result.get("lookup_cache_version") == LOOKUP_CACHE_VERSION:
+                if _cached_lookup_is_fresh(result, cached["cached_at"], barcode):
                     return result
             except json.JSONDecodeError:
                 pass

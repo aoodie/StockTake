@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from app import database
 from app.services import enrichment
 
@@ -141,3 +143,16 @@ def test_openai_web_search_rejects_uncited_identity(monkeypatch):
     monkeypatch.setattr(enrichment.httpx, "Client", lambda **kwargs: FakeClient(post_response=uncited, **kwargs))
 
     assert enrichment.openai_web_search_product("5000000000000") == {}
+
+
+def test_negative_lookup_cache_expires():
+    result = {
+        "name": "Product 123",
+        "source_urls": [],
+        "lookup_cache_version": enrichment.LOOKUP_CACHE_VERSION,
+    }
+    recent = datetime.now(timezone.utc).isoformat()
+    expired = (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat()
+
+    assert enrichment._cached_lookup_is_fresh(result, recent, "123") is True
+    assert enrichment._cached_lookup_is_fresh(result, expired, "123") is False
