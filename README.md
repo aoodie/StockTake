@@ -2,6 +2,10 @@
 
 Offline-first stocktaking system for alcoholic drink inventory.
 
+For the complete current scope, production handoff, continuation steps, and
+recommended next work, read
+[`docs/SCOPE_OF_WORK.md`](docs/SCOPE_OF_WORK.md).
+
 This repository contains:
 
 - `backend/static`: web-based scanner app/PWA for phones, tablets, and desktops.
