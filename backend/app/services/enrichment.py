@@ -13,6 +13,13 @@ IMAGE_DIR = Path(__file__).resolve().parents[2] / "data" / "product-images"
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY_FILE = DATA_DIR / "openai_api_key.txt"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+LOOKUP_CACHE_VERSION = 2
+OPEN_FACTS_SOURCES = (
+    ("Open Food Facts", "https://world.openfoodfacts.org"),
+    ("Open Products Facts", "https://world.openproductsfacts.org"),
+    ("Open Beauty Facts", "https://world.openbeautyfacts.org"),
+    ("Open Pet Food Facts", "https://world.openpetfoodfacts.org"),
+)
 
 def openai_model() -> str:
     return get_setting("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
@@ -89,8 +96,9 @@ def test_openai_connection() -> dict[str, str | bool]:
         "message": f"Connected. Model {data.get('id') or model} is available.",
     }
 
-def parse_open_food_facts(product: dict, barcode: str) -> dict:
-    name = product.get("product_name") or product.get("generic_name") or f"Product {barcode}"
+def parse_open_facts(product: dict, barcode: str, source_name: str, source_url: str) -> dict:
+    raw_name = product.get("product_name") or product.get("generic_name") or ""
+    name = raw_name or f"Product {barcode}"
     quantity = product.get("quantity") or ""
     category = ""
     categories = product.get("categories_tags") or product.get("categories_hierarchy") or []
@@ -121,10 +129,15 @@ def parse_open_food_facts(product: dict, barcode: str) -> dict:
         "unit": "bottle" if re.search(r"\b(cl|ml|l)\b", quantity, re.I) else "each",
         "image_url": image_url,
         "image_candidates": image_candidates[:6],
-        "source_urls": [f"https://world.openfoodfacts.org/product/{barcode}"],
-        "source_name": "Open Food Facts",
-        "confidence": 0.72 if name else 0.4,
+        "source_urls": [f"{source_url}/product/{barcode}"],
+        "source_name": source_name,
+        "lookup_sources": [source_name],
+        "lookup_cache_version": LOOKUP_CACHE_VERSION,
+        "confidence": 0.72 if raw_name else 0.4,
     }
+
+def parse_open_food_facts(product: dict, barcode: str) -> dict:
+    return parse_open_facts(product, barcode, "Open Food Facts", "https://world.openfoodfacts.org")
 
 def extract_json_object(text: str) -> dict:
     text = text.strip()
@@ -209,6 +222,79 @@ def llm_refine_product(suggestion: dict) -> dict:
             
     refined = extract_json_object(output)
     return {**suggestion, **{k: v for k, v in refined.items() if v not in (None, "")}}
+
+def _response_output_text(data: dict[str, Any]) -> str:
+    if data.get("output_text"):
+        return str(data["output_text"])
+    parts = []
+    for item in data.get("output") or []:
+        for content in item.get("content") or []:
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                parts.append(str(content["text"]))
+    return "\n".join(parts)
+
+def _response_source_urls(data: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for item in data.get("output") or []:
+        for content in item.get("content") or []:
+            for annotation in content.get("annotations") or []:
+                url = str(annotation.get("url") or "").strip()
+                if url and url.startswith("https://") and url not in urls:
+                    urls.append(url)
+    return urls[:8]
+
+def openai_web_search_product(barcode: str) -> dict:
+    api_key = openai_api_key()
+    if not api_key:
+        return {}
+    prompt = (
+        f"Find the retail product with exact barcode/GTIN {barcode}. "
+        "Return compact JSON only with fields name, brand, category, size, unit, confidence. "
+        "Do not guess. If the exact barcode is not supported by search evidence, return an empty name."
+    )
+    payload = {
+        "model": openai_model(),
+        "tools": [{"type": "web_search"}],
+        "input": prompt,
+    }
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                "https://api.openai.com/v1/responses",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        return {"web_search_error": str(exc)}
+    sources = _response_source_urls(data)
+    result = extract_json_object(_response_output_text(data))
+    name = str(result.get("name") or "").strip()
+    if not name or not sources:
+        return {}
+    try:
+        confidence = max(0.0, min(0.68, float(result.get("confidence") or 0.55)))
+    except (TypeError, ValueError):
+        confidence = 0.55
+    return {
+        "barcode": barcode,
+        "name": name,
+        "brand": str(result.get("brand") or "").strip(),
+        "category": str(result.get("category") or "").strip(),
+        "size": str(result.get("size") or "").strip(),
+        "unit": str(result.get("unit") or "each").strip(),
+        "image_url": "",
+        "image_candidates": [],
+        "source_urls": sources,
+        "source_name": "OpenAI web search",
+        "lookup_sources": ["OpenAI web search"],
+        "lookup_cache_version": LOOKUP_CACHE_VERSION,
+        "confidence": confidence,
+    }
 
 def _compact_sources(*items: Any) -> list[dict[str, str]]:
     sources: list[dict[str, str]] = []
@@ -375,7 +461,6 @@ def build_ai_product_suggestion(evidence: dict[str, Any]) -> dict[str, Any]:
     return _llm_refine_ai_suggestion(evidence, draft)
 
 def fetch_product_suggestion(barcode: str) -> dict:
-    # 1. Check SQLite lookup cache first
     with get_db() as db:
         cached = db.execute(
             "SELECT suggested_json FROM product_lookup_cache WHERE barcode = ?",
@@ -383,11 +468,12 @@ def fetch_product_suggestion(barcode: str) -> dict:
         ).fetchone()
         if cached:
             try:
-                return json.loads(cached["suggested_json"])
+                result = json.loads(cached["suggested_json"])
+                if result.get("lookup_cache_version") == LOOKUP_CACHE_VERSION:
+                    return result
             except json.JSONDecodeError:
                 pass
-                
-    # 2. Run Open Food Facts API lookup
+
     suggestion = {
         "barcode": barcode,
         "name": f"Product {barcode}",
@@ -399,22 +485,46 @@ def fetch_product_suggestion(barcode: str) -> dict:
         "image_candidates": [],
         "source_urls": [],
         "source_name": "",
+        "lookup_sources": [],
+        "lookup_cache_version": LOOKUP_CACHE_VERSION,
         "confidence": 0.25,
     }
+    lookup_errors = []
     try:
-        with httpx.Client(timeout=12, follow_redirects=True) as client:
-            response = client.get(f"https://world.openfoodfacts.org/api/v2/product/{barcode}.json")
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("status") == 1:
-                    suggestion = parse_open_food_facts(data.get("product") or {}, barcode)
+        with httpx.Client(
+            timeout=7,
+            follow_redirects=True,
+            headers={"User-Agent": "StockTake/1.0 (internal product lookup)"},
+        ) as client:
+            for source_name, source_url in OPEN_FACTS_SOURCES:
+                try:
+                    response = client.get(f"{source_url}/api/v2/product/{barcode}.json")
+                    if response.status_code not in {200, 404}:
+                        response.raise_for_status()
+                    data = response.json()
+                    if data.get("status") == 1:
+                        candidate = parse_open_facts(data.get("product") or {}, barcode, source_name, source_url)
+                        if candidate["name"] != f"Product {barcode}":
+                            suggestion = candidate
+                            break
+                except Exception as exc:
+                    lookup_errors.append(f"{source_name}: {exc}")
     except Exception as exc:
-        suggestion["lookup_error"] = str(exc)
-        
-    # 3. LLM Refinement
-    suggestion = llm_refine_product(suggestion)
-    
-    # 4. Save to cache
+        lookup_errors.append(str(exc))
+
+    if suggestion["name"] == f"Product {barcode}":
+        web_result = openai_web_search_product(barcode)
+        if web_result.get("name"):
+            suggestion = web_result
+        elif web_result.get("web_search_error"):
+            lookup_errors.append(f"OpenAI web search: {web_result['web_search_error']}")
+
+    if lookup_errors:
+        suggestion["lookup_error"] = "; ".join(lookup_errors)
+
+    if suggestion.get("source_urls") and suggestion.get("source_name") != "OpenAI web search":
+        suggestion = llm_refine_product(suggestion)
+
     with get_db() as db:
         db.execute(
             """

@@ -70,10 +70,12 @@ Set these environment variables in production:
 
 - `ADMIN_PASSWORD`: admin login password. If unset, a random password is generated in `backend/data/admin_password.txt`.
 - `ADMIN_SECRET`: cookie signing secret. Defaults to the admin password.
-- `OPENAI_API_KEY`: optional; enables LLM cleanup of online barcode lookup results.
+- `OPENAI_API_KEY`: optional; enables cited web-search fallback and LLM cleanup when the structured barcode databases have no match.
 - `OPENAI_MODEL`: optional model override for enrichment. Defaults to `gpt-4.1-mini`.
 
 Approved product photos are saved under `backend/data/product-images`, with the product record storing the served image URL and source metadata.
+
+Barcode enrichment checks Open Food Facts, Open Products Facts, Open Beauty Facts, and Open Pet Food Facts. If none identify the barcode and an OpenAI token is configured, it performs a cited web search and keeps the result for review.
 
 For local development, set `ADMIN_PASSWORD=stocktake-admin` if you want the predictable development password.
 
