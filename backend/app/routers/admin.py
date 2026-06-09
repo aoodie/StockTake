@@ -1114,11 +1114,14 @@ def admin_import_procurewizard(
     return result
 
 @router.get("/admin/api/procurewizard/status")
-def admin_procurewizard_status(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
+def admin_procurewizard_status(
+    session_id: str = "",
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
     require_admin(_)
     init_db()
     with get_db() as db:
-        return import_summary(db)
+        return import_summary(db, session_id)
 
 @router.patch("/admin/api/procurewizard/rows/{row_id}")
 def admin_link_procurewizard_row(

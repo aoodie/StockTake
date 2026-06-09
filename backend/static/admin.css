@@ -386,6 +386,145 @@ label {
   border-radius: var(--radius-md);
   background: var(--glass-bg);
 }
+.pw-active-file,
+.pw-export-message,
+.export-readiness {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+}
+.pw-active-file span,
+.pw-export-message span,
+.export-readiness span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.pw-active-file div span,
+.pw-active-file div strong,
+.pw-export-message strong,
+.pw-export-message span,
+.export-readiness strong,
+.export-readiness span {
+  display: block;
+}
+.pw-active-file strong {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.pw-session-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.pw-session-summary > div {
+  padding: 12px;
+  border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+}
+.pw-session-summary > div.good { border-left-color: var(--color-accent); }
+.pw-session-summary > div.warn { border-left-color: #f59e0b; }
+.pw-session-summary span,
+.pw-session-summary small,
+.pw-session-summary strong {
+  display: block;
+}
+.pw-session-summary span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.pw-session-summary strong {
+  margin-top: 4px;
+  font-size: 24px;
+}
+.pw-session-summary small {
+  color: var(--text-secondary);
+}
+.pw-export-message.ready,
+.export-readiness.ready {
+  border-color: rgba(20, 184, 166, 0.32);
+  background: rgba(20, 184, 166, 0.08);
+}
+.pw-export-message.blocked,
+.export-readiness.blocked,
+.export-readiness.warning {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.07);
+}
+.export-downloads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.export-downloads .download-link {
+  min-height: 68px;
+  align-items: flex-start;
+  flex-direction: column;
+  text-align: left;
+}
+.export-downloads .download-link span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+}
+.export-downloads .download-link.disabled span {
+  color: var(--text-muted);
+}
+.pw-exceptions {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(245, 158, 11, 0.06);
+}
+.pw-exceptions header,
+.pw-exceptions > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pw-exceptions header span,
+.pw-exceptions small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.pw-exceptions > div {
+  padding-top: 7px;
+  border-top: 1px solid var(--glass-border);
+}
+.pw-exceptions > div span:first-child strong,
+.pw-exceptions > div span:first-child small {
+  display: block;
+}
+.pw-counted-title {
+  margin-top: 4px;
+}
+.pw-count-badge {
+  flex: none;
+  min-width: 72px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.12);
+  border: 1px solid rgba(20, 184, 166, 0.24);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+.empty-state {
+  padding: 24px;
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
 .pw-import-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1299,7 +1438,15 @@ dialog footer {
 
 @media (max-width: 850px) {
   .pw-link-controls,
-  .pw-row-details {
+  .pw-row-details,
+  .pw-session-summary,
+  .export-downloads {
     grid-template-columns: 1fr;
+  }
+  .pw-active-file,
+  .pw-exceptions header,
+  .pw-exceptions > div {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

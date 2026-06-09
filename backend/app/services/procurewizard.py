@@ -351,10 +351,10 @@ def active_import(db: Connection) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def import_summary(db: Connection) -> dict[str, Any]:
+def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
     active = active_import(db)
     if not active:
-        return {"active": None, "rows": [], "counts": {}}
+        return {"active": None, "rows": [], "counts": {}, "session": {}}
     counts = {
         row["match_status"]: row["c"]
         for row in db.execute(
@@ -367,22 +367,108 @@ def import_summary(db: Connection) -> dict[str, Any]:
             (active["id"],),
         ).fetchall()
     }
+    session = {
+        "session_id": session_id,
+        "line_count": 0,
+        "product_count": 0,
+        "quantity_total": "0",
+        "pw_product_count": 0,
+        "pw_quantity_total": "0",
+        "unmapped_product_count": 0,
+        "unmapped_quantity_total": "0",
+        "unmapped_products": [],
+    }
+    if session_id:
+        stocktake = db.execute(
+            """
+            SELECT COUNT(*) AS line_count, COUNT(DISTINCT product_id) AS product_count,
+                   COALESCE(SUM(CAST(quantity_decimal AS REAL)), 0) AS quantity_total
+            FROM stocktake_lines
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        pw_totals = db.execute(
+            """
+            SELECT COUNT(DISTINCT sl.product_id) AS product_count,
+                   COALESCE(SUM(CAST(sl.quantity_decimal AS REAL)), 0) AS quantity_total
+            FROM stocktake_lines sl
+            WHERE sl.session_id = ?
+              AND EXISTS (
+                SELECT 1 FROM procurewizard_rows pwr
+                WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
+              )
+            """,
+            (session_id, active["id"]),
+        ).fetchone()
+        unmapped_totals = db.execute(
+            """
+            SELECT COUNT(DISTINCT sl.product_id) AS product_count,
+                   COALESCE(SUM(CAST(sl.quantity_decimal AS REAL)), 0) AS quantity_total
+            FROM stocktake_lines sl
+            WHERE sl.session_id = ?
+              AND NOT EXISTS (
+                SELECT 1 FROM procurewizard_rows pwr
+                WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
+              )
+            """,
+            (session_id, active["id"]),
+        ).fetchone()
+        unmapped = [
+            dict(row)
+            for row in db.execute(
+                """
+                SELECT sl.product_id, COALESCE(p.name, sl.product_name_snapshot, sl.barcode_snapshot) AS product_name,
+                       COALESCE(p.barcode, sl.barcode_snapshot, '') AS barcode,
+                       COUNT(*) AS line_count, SUM(CAST(sl.quantity_decimal AS REAL)) AS quantity_total
+                FROM stocktake_lines sl
+                LEFT JOIN products p ON p.id = sl.product_id
+                WHERE sl.session_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM procurewizard_rows pwr
+                    WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
+                  )
+                GROUP BY sl.product_id, product_name, barcode
+                ORDER BY quantity_total DESC, product_name
+                LIMIT 20
+                """,
+                (session_id, active["id"]),
+            ).fetchall()
+        ]
+        session.update(
+            {
+                "line_count": stocktake["line_count"] or 0,
+                "product_count": stocktake["product_count"] or 0,
+                "quantity_total": format_decimal(Decimal(str(stocktake["quantity_total"] or 0))),
+                "pw_product_count": pw_totals["product_count"] or 0,
+                "pw_quantity_total": format_decimal(Decimal(str(pw_totals["quantity_total"] or 0))),
+                "unmapped_product_count": unmapped_totals["product_count"] or 0,
+                "unmapped_quantity_total": format_decimal(Decimal(str(unmapped_totals["quantity_total"] or 0))),
+                "unmapped_products": unmapped,
+            }
+        )
     rows = [
         dict(row)
         for row in db.execute(
-            """
-            SELECT pwr.*, p.name AS product_name, p.barcode AS product_barcode
+            f"""
+            SELECT pwr.*, p.name AS product_name, p.barcode AS product_barcode,
+                   COALESCE((
+                     SELECT SUM(CAST(sl.quantity_decimal AS REAL))
+                     FROM stocktake_lines sl
+                     WHERE sl.session_id = ? AND sl.product_id = pwr.product_id
+                   ), 0) AS counted_quantity
             FROM procurewizard_rows pwr
             LEFT JOIN products p ON p.id = pwr.product_id
             WHERE pwr.import_id = ?
-            ORDER BY CASE pwr.match_status WHEN 'unmatched' THEN 0 WHEN 'matched' THEN 1 ELSE 2 END,
+            ORDER BY CASE WHEN counted_quantity > 0 THEN 0 ELSE 1 END,
+                     CASE pwr.match_status WHEN 'unmatched' THEN 0 WHEN 'matched' THEN 1 ELSE 2 END,
                      pwr.match_score ASC, pwr.row_index ASC
             LIMIT 100
             """,
-            (active["id"],),
+            (session_id, active["id"]),
         ).fetchall()
     ]
-    return {"active": active, "rows": rows, "counts": counts}
+    return {"active": active, "rows": rows, "counts": counts, "session": session}
 
 
 def link_procurewizard_row(db: Connection, row_id: str, product_id: str | None) -> dict[str, Any]:
@@ -462,6 +548,20 @@ def build_procurewizard_csv(db: Connection, session_id: str) -> tuple[str, bytes
     if not active:
         raise ValueError("No active ProcureWizard import found.")
     totals = counted_quantities_by_product(db, session_id)
+    mapped_product_count = db.execute(
+        """
+        SELECT COUNT(DISTINCT product_id) AS c
+        FROM procurewizard_rows
+        WHERE import_id = ? AND product_id IN (
+          SELECT DISTINCT product_id FROM stocktake_lines WHERE session_id = ?
+        )
+        """,
+        (active["id"], session_id),
+    ).fetchone()["c"]
+    if not mapped_product_count:
+        raise ValueError(
+            "This session has no ProcureWizard-linked counted products. Download All Scanned Lines instead or map products first."
+        )
     output_rows: list[list[str]] = [
         json.loads(active["metadata_json"]),
         json.loads(active["header_json"]),

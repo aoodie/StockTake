@@ -922,19 +922,26 @@ async function loadExportReview(sessionId = els.exportSession.value) {
     const ready = data.line_count > 0 && data.missing_bin_count === 0 && data.draft_count === 0;
     const rows = data.missing_bin_rows || [];
     els.exportReview.innerHTML = `
+      <div class="export-readiness ${ready ? "ready" : data.line_count ? "warning" : "blocked"}">
+        <div>
+          <strong>${ready ? "Validated export ready" : data.line_count ? "Export needs review" : "No scans in this session"}</strong>
+          <span>${ready ? "All scanned lines have confirmed products and BINs." : data.line_count ? "Raw scans can be downloaded now. Resolve exceptions before using the validated Excel export." : "Choose a session containing scanned stocktake lines."}</span>
+        </div>
+      </div>
       <div class="summary-grid">
         <div class="metric"><span>Lines Counted</span><strong>${escapeHtml(data.line_count)}</strong></div>
         <div class="metric"><span>Missing BIN</span><strong>${escapeHtml(data.missing_bin_count)}</strong></div>
         <div class="metric"><span>Unresolved Drafts</span><strong>${escapeHtml(data.draft_count)}</strong></div>
       </div>
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <a class="download-link" href="/export/scanned/${encodeURIComponent(sessionId)}">Download All Scanned Lines</a>
-          <a class="download-link ${ready ? "" : "disabled"}" href="/export/${encodeURIComponent(sessionId)}">Download Locked Excel Sheet</a>
-        </div>
-        <p class="meta">${ready ? "✅ Export is ready for locking." : "⚠️ Resolve missing BINs and draft details before final export."}</p>
+      <div class="export-downloads">
+        <a class="download-link ${data.line_count ? "" : "disabled"}" href="/export/scanned/${encodeURIComponent(sessionId)}">
+          <strong>All Scanned Lines</strong><span>Complete Excel backup, including unmapped products</span>
+        </a>
+        <a class="download-link ${ready ? "" : "disabled"}" href="/export/${encodeURIComponent(sessionId)}">
+          <strong>Validated Stocktake Excel</strong><span>Available after BIN and draft issues are resolved</span>
+        </a>
       </div>
-      <div class="task-list" style="margin-top:12px;">
+      <div class="task-list">
         ${rows.map((row) => `
           <article class="missing-row">
             <div>
@@ -960,7 +967,7 @@ async function loadExportReview(sessionId = els.exportSession.value) {
 async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
   if (!els.pwStatus) return;
   try {
-    const data = await api("/admin/api/procurewizard/status");
+    const data = await api(`/admin/api/procurewizard/status?session_id=${encodeURIComponent(sessionId || "")}`);
     state.procurewizard = data;
     const active = data.active;
     if (!active) {
@@ -971,25 +978,52 @@ async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
       return;
     }
     const counts = data.counts || {};
+    const session = data.session || {};
+    const hasScans = Number(session.line_count || 0) > 0;
+    const hasPwCounts = Number(session.pw_product_count || 0) > 0;
     els.pwStatus.innerHTML = `
-      <p><strong>Active file:</strong> ${escapeHtml(active.filename)} · ${escapeHtml(active.row_count)} rows</p>
-      <p class="meta-details">
-        <span>Matched: ${escapeHtml(counts.matched || 0)}</span>
-        <span>Imported: ${escapeHtml(counts.imported || 0)}</span>
-        <span>Manual: ${escapeHtml(counts.manual || 0)}</span>
-        <span>Unmatched: ${escapeHtml(counts.unmatched || 0)}</span>
-      </p>
+      <div class="pw-active-file">
+        <div><span>Active template</span><strong>${escapeHtml(active.filename)}</strong></div>
+        <span>${escapeHtml(active.row_count)} rows · ${escapeHtml(counts.manual || 0)} manual links</span>
+      </div>
+      <div class="pw-session-summary">
+        <div><span>Scanned products</span><strong>${escapeHtml(session.product_count || 0)}</strong><small>Qty ${escapeHtml(session.quantity_total || 0)}</small></div>
+        <div class="${hasPwCounts ? "good" : "warn"}"><span>Going to ProcureWizard</span><strong>${escapeHtml(session.pw_product_count || 0)}</strong><small>Qty ${escapeHtml(session.pw_quantity_total || 0)}</small></div>
+        <div class="${Number(session.unmapped_product_count || 0) ? "warn" : "good"}"><span>Not in PW export</span><strong>${escapeHtml(session.unmapped_product_count || 0)}</strong><small>Qty ${escapeHtml(session.unmapped_quantity_total || 0)}</small></div>
+      </div>
+      <div class="pw-export-message ${hasPwCounts ? "ready" : "blocked"}">
+        <strong>${hasPwCounts ? "ProcureWizard CSV ready" : hasScans ? "No scanned products are linked to ProcureWizard" : "Selected session has no scans"}</strong>
+        <span>${hasPwCounts ? `${session.pw_product_count} product counts will be written into the template.` : hasScans ? "Use All Scanned Lines or map scanned products before downloading a ProcureWizard CSV." : "Select a session with counts before exporting."}</span>
+      </div>
     `;
-    if (sessionId) {
+    if (sessionId && hasPwCounts) {
       els.pwDownloadLink.href = `/admin/api/procurewizard/export/${encodeURIComponent(sessionId)}`;
       els.pwDownloadLink.classList.remove("disabled");
+    } else {
+      els.pwDownloadLink.href = "#";
+      els.pwDownloadLink.classList.add("disabled");
     }
-    els.pwRows.innerHTML = (data.rows || []).slice(0, 30).map((row) => `
+    const countedRows = (data.rows || []).filter((row) => Number(row.counted_quantity || 0) > 0);
+    const unmappedProducts = session.unmapped_products || [];
+    els.pwRows.innerHTML = `
+      ${unmappedProducts.length ? `
+        <section class="pw-exceptions">
+          <header><strong>Excluded from ProcureWizard CSV</strong><span>These scans remain available in All Scanned Lines.</span></header>
+          ${unmappedProducts.map((product) => `
+            <div>
+              <span><strong>${escapeHtml(product.product_name)}</strong><small>${escapeHtml(product.barcode || product.product_id || "")}</small></span>
+              <span>Qty ${escapeHtml(product.quantity_total)}</span>
+            </div>
+          `).join("")}
+        </section>
+      ` : ""}
+      ${countedRows.length ? `<h3 class="pw-counted-title">Counts written to ProcureWizard</h3>` : ""}
+      ${countedRows.map((row) => `
       <article class="task-row pw-row">
         <div class="pw-row-main">
           <div class="pw-row-heading">
             <h3>${escapeHtml(row.description)}</h3>
-            ${statusBadge(row.match_status)}
+            <span class="pw-count-badge">Qty ${escapeHtml(row.counted_quantity)}</span>
           </div>
           <dl class="pw-row-details">
             <div><dt>PID</dt><dd>${escapeHtml(row.pid)}</dd></div>
@@ -1008,7 +1042,9 @@ async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
           <button class="secondary" data-action="link-pw-row" data-id="${escapeHtml(row.id)}" type="button">Link</button>
         </div>
       </article>
-    `).join("");
+      `).join("")}
+      ${!countedRows.length && !unmappedProducts.length ? `<p class="empty-state">No counted products to preview for this session.</p>` : ""}
+    `;
   } catch (err) {
     els.pwStatus.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
   }

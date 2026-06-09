@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app import database
 from app.services.procurewizard import (
     build_procurewizard_csv,
+    import_summary,
     import_procurewizard_csv,
     link_procurewizard_row,
     parse_procurewizard_csv_bytes,
@@ -130,3 +131,75 @@ def test_manual_procurewizard_link_persists_as_pid_alias_across_reimport(tmp_pat
         ).fetchone()
         assert row["product_id"] == "product-real-jd"
         assert row["match_reason"] == "pid/barcode match"
+
+
+def test_procurewizard_session_summary_separates_mapped_and_unmapped_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with database.get_db() as db:
+        import_procurewizard_csv(db, "pw.csv", sample_csv())
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('outside-pw', '999', 'Outside PW', '', '', 'each', 'confirmed', ?)
+            """,
+            (now,),
+        )
+        db.executemany(
+            """
+            INSERT INTO stocktake_lines (
+                id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                product_name_snapshot, quantity_decimal, draft_status, counted_at, device_id, notes
+            ) VALUES (?, 'session-summary', 'cellar', ?, ?, '', ?, ?, 'confirmed', ?, 'device-a', '')
+            """,
+            [
+                ("line-mapped", "procurewizard-3862551", "3862551", "Jack Daniels Rye", "4", now),
+                ("line-unmapped", "outside-pw", "999", "Outside PW", "2", now),
+            ],
+        )
+        db.commit()
+        summary = import_summary(db, "session-summary")
+
+    assert summary["session"]["product_count"] == 2
+    assert summary["session"]["pw_product_count"] == 1
+    assert summary["session"]["pw_quantity_total"] == "4"
+    assert summary["session"]["unmapped_product_count"] == 1
+    assert summary["rows"][0]["description"] == "Jack Daniels Rye"
+    assert summary["rows"][0]["counted_quantity"] == 4
+
+
+def test_procurewizard_export_rejects_session_without_linked_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with database.get_db() as db:
+        import_procurewizard_csv(db, "pw.csv", sample_csv())
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('outside-pw', '999', 'Outside PW', '', '', 'each', 'confirmed', ?)
+            """,
+            (now,),
+        )
+        db.execute(
+            """
+            INSERT INTO stocktake_lines (
+                id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                product_name_snapshot, quantity_decimal, draft_status, counted_at, device_id, notes
+            ) VALUES ('line-outside', 'session-no-pw', 'cellar', 'outside-pw', '999', '', 'Outside PW',
+                      '2', 'confirmed', ?, 'device-a', '')
+            """,
+            (now,),
+        )
+        db.commit()
+        try:
+            build_procurewizard_csv(db, "session-no-pw")
+        except ValueError as exc:
+            assert "no ProcureWizard-linked counted products" in str(exc)
+        else:
+            raise AssertionError("Expected ProcureWizard export to reject an unchanged template")
