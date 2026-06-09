@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=typed-pw-suggest-1";
+} from "./frontend-utils.js?v=qty-keypad-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -604,14 +604,27 @@ function showScanHud(product, quantity, total, variant = "success") {
       </div>
       ${product ? `
         <div class="hud-lookup" data-role="lookup-status">${isDraft ? "Looking up product details and photo..." : "Product matched"}</div>
-        <label class="hud-quantity-label" for="hudQuantityInput">Quantity</label>
-        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="decimal" autocomplete="off" value="${escapeHtml(quantity || "1")}">
+        <label class="hud-quantity-label" for="hudQuantityInput">Quantity <span>Tap number or type</span></label>
+        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="decimal" enterkeyhint="done" autocomplete="off" aria-label="Quantity" value="${escapeHtml(quantity || "1")}" data-replace-on-entry="true">
         <div class="hud-quick" role="group" aria-label="Quick quantity">
-          <button data-action="set-quantity" data-value="1" type="button">1</button>
           <button data-action="add-quantity" data-value="1" type="button">+1</button>
           <button data-action="add-quantity" data-value="6" type="button">+6</button>
           <button data-action="add-quantity" data-value="12" type="button">+12</button>
           <button data-action="clear-quantity" type="button">Clear</button>
+        </div>
+        <div class="hud-keypad" role="group" aria-label="Quantity keypad">
+          <button data-action="quantity-key" data-value="1" type="button">1</button>
+          <button data-action="quantity-key" data-value="2" type="button">2</button>
+          <button data-action="quantity-key" data-value="3" type="button">3</button>
+          <button data-action="quantity-key" data-value="4" type="button">4</button>
+          <button data-action="quantity-key" data-value="5" type="button">5</button>
+          <button data-action="quantity-key" data-value="6" type="button">6</button>
+          <button data-action="quantity-key" data-value="7" type="button">7</button>
+          <button data-action="quantity-key" data-value="8" type="button">8</button>
+          <button data-action="quantity-key" data-value="9" type="button">9</button>
+          <button data-action="quantity-key" data-value="." type="button">.</button>
+          <button data-action="quantity-key" data-value="0" type="button">0</button>
+          <button data-action="quantity-backspace" type="button">Del</button>
         </div>
       ` : ""}
       <div class="hud-actions">
@@ -623,7 +636,6 @@ function showScanHud(product, quantity, total, variant = "success") {
   `;
   state.awaitingNextScan = true;
   els.scanHud.classList.remove("hidden");
-  requestAnimationFrame(() => els.scanHud.querySelector("#hudQuantityInput")?.select());
 }
 
 function closeScanHud({ reset = false } = {}) {
@@ -2023,13 +2035,19 @@ function bindEvents() {
     if (button?.dataset.action === "set-quantity") {
       state.quantity = button.dataset.value || "1";
       const input = els.scanHud.querySelector("#hudQuantityInput");
-      if (input) input.value = state.quantity;
+      if (input) {
+        input.value = state.quantity;
+        input.dataset.replaceOnEntry = "true";
+      }
       renderQuantity();
     }
     if (button?.dataset.action === "add-quantity") {
       state.quantity = addDecimalStrings(state.quantity || "0", button.dataset.value || "0");
       const input = els.scanHud.querySelector("#hudQuantityInput");
-      if (input) input.value = state.quantity;
+      if (input) {
+        input.value = state.quantity;
+        input.dataset.replaceOnEntry = "true";
+      }
       renderQuantity();
     }
     if (button?.dataset.action === "clear-quantity") {
@@ -2037,7 +2055,29 @@ function bindEvents() {
       const input = els.scanHud.querySelector("#hudQuantityInput");
       if (input) {
         input.value = "";
-        input.focus();
+        input.dataset.replaceOnEntry = "true";
+      }
+      renderQuantity();
+    }
+    if (button?.dataset.action === "quantity-key") {
+      const input = els.scanHud.querySelector("#hudQuantityInput");
+      const key = button.dataset.value || "";
+      if (!input || (key === "." && state.quantity.includes("."))) return;
+      if (input.dataset.replaceOnEntry === "true") {
+        state.quantity = key === "." ? "0." : key;
+        input.dataset.replaceOnEntry = "false";
+      } else {
+        state.quantity = state.quantity === "0" && key !== "." ? key : `${state.quantity}${key}`;
+      }
+      input.value = state.quantity;
+      renderQuantity();
+    }
+    if (button?.dataset.action === "quantity-backspace") {
+      const input = els.scanHud.querySelector("#hudQuantityInput");
+      state.quantity = state.quantity.slice(0, -1);
+      if (input) {
+        input.value = state.quantity;
+        input.dataset.replaceOnEntry = "false";
       }
       renderQuantity();
     }
@@ -2046,7 +2086,13 @@ function bindEvents() {
   els.scanHud.addEventListener("input", (event) => {
     if (event.target.id !== "hudQuantityInput") return;
     state.quantity = event.target.value.trim();
+    event.target.dataset.replaceOnEntry = "false";
     renderQuantity();
+  });
+  els.scanHud.addEventListener("focusin", (event) => {
+    if (event.target.id !== "hudQuantityInput") return;
+    event.target.select();
+    event.target.dataset.replaceOnEntry = "true";
   });
   els.scanHud.addEventListener("keydown", (event) => {
     if (event.target.id === "hudQuantityInput" && event.key === "Enter") {

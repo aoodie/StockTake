@@ -13,8 +13,8 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for typed PW suggestions", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=typed-pw-suggest-1/);
+test("scanner build cache is bumped for quantity keypad", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=qty-keypad-1/);
   assert.match(appSource, /zxing-library\.min\.js\?v=typed-pw-suggest-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
@@ -63,4 +63,11 @@ test("a scan is only committed from the full-screen quantity confirmation", () =
   assert.doesNotMatch(handleScanSource, /commitScanQuantity/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /if \(button\?\.dataset\.action === "save-next"\) confirmQuantity\(\)/);
+});
+
+test("full-screen confirmation has a thumb quantity keypad", () => {
+  assert.match(appSource, /class="hud-keypad"/);
+  assert.match(appSource, /data-action="quantity-key"/);
+  assert.match(appSource, /data-replace-on-entry="true"/);
+  assert.match(appSource, /data-action="quantity-backspace"/);
 });
