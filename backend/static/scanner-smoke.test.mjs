@@ -30,6 +30,13 @@ test("unknown scan can choose a ProcureWizard match before saving", () => {
   assert.match(appSource, /renderProcureWizardMatches/);
   assert.match(appSource, /data-action="choose-pw"/);
   assert.match(appSource, /Save & Next will map this barcode and count it against the PW row/);
+  assert.match(appSource, /await cacheProduct\(product\)/);
+});
+
+test("unknown description suggests existing catalog products", () => {
+  assert.match(appSource, /matchingCatalogProducts/);
+  assert.match(appSource, /data-action="choose-existing-product"/);
+  assert.match(appSource, /Save & Next will remember this barcode/);
 });
 
 test("IndexedDB state uses an explicit serializable allowlist", () => {

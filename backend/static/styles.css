@@ -458,8 +458,25 @@ dialog {
   display: grid;
   gap: 12px;
 }
+.unknown-product-suggestions {
+  display: grid;
+  gap: 8px;
+}
+.unknown-product-suggestions:empty {
+  display: none;
+}
+.unknown-product-suggestions button {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+  background: #1e3a5f;
+}
+.unknown-product-suggestions small {
+  color: #bfdbfe;
+}
 .confirm-shell button:first-of-type,
-.unknown-shell button:first-of-type {
+#saveUnknownButton {
   background: #16a34a;
 }
 .diagnostics-list {

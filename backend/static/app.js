@@ -73,6 +73,7 @@ const els = {
   unknownDialog: document.querySelector("#unknownDialog"),
   unknownBarcodeText: document.querySelector("#unknownBarcodeText"),
   unknownNameInput: document.querySelector("#unknownNameInput"),
+  unknownProductSuggestions: document.querySelector("#unknownProductSuggestions"),
   unknownBinInput: document.querySelector("#unknownBinInput"),
   saveUnknownButton: document.querySelector("#saveUnknownButton"),
   confirmDialog: document.querySelector("#confirmDialog"),
@@ -668,6 +669,7 @@ async function chooseProcureWizardMatch(index) {
   });
   state.currentProduct = product;
   state.pendingUnknownProduct = null;
+  await cacheProduct(product);
   renderProduct(product);
   const name = els.scanHud.querySelector('[data-role="hud-name"]');
   const meta = els.scanHud.querySelector('[data-role="hud-meta"]');
@@ -683,6 +685,57 @@ async function chooseProcureWizardMatch(index) {
   }
   if (current) current.textContent = `Current total: ${await currentProductCount(product)}`;
   if (lookup) lookup.textContent = `ProcureWizard product selected · PID ${match.pid}. Save & Next will map this barcode and count it against the PW row.`;
+}
+
+function matchingCatalogProducts(query) {
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  const seen = new Set();
+  return [...productIndex.values()]
+    .filter((product) => {
+      if (!product?.id || product.draft_status === "draft" || seen.has(product.id)) return false;
+      seen.add(product.id);
+      const search = [product.name, product.category, product.size, product.bin].filter(Boolean).join(" ").toLowerCase();
+      return terms.every((term) => search.includes(term));
+    })
+    .slice(0, 6);
+}
+
+function renderUnknownProductSuggestions() {
+  const matches = matchingCatalogProducts(els.unknownNameInput.value);
+  els.unknownProductSuggestions.innerHTML = matches.map((product, index) => `
+    <button data-action="choose-existing-product" data-index="${index}" type="button">
+      <strong>${escapeHtml(product.name)}</strong>
+      <small>${escapeHtml(productSubtitle(product))}</small>
+    </button>
+  `).join("");
+  els.unknownProductSuggestions._matches = matches;
+}
+
+async function chooseExistingProductForUnknown(index) {
+  const match = els.unknownProductSuggestions._matches?.[index];
+  if (!match || !state.pendingBarcode) return;
+  const product = normalProduct({
+    ...match,
+    barcode: state.pendingBarcode,
+    barcode_raw: match.barcode,
+    barcodes: [
+      ...(match.barcodes || []),
+      { barcode: state.pendingBarcode, label: "Scanned alias", is_primary: 0 }
+    ]
+  });
+  await cacheProduct(product);
+  state.currentProduct = product;
+  state.pendingUnknownProduct = null;
+  renderProduct(product);
+  const name = els.scanHud.querySelector('[data-role="hud-name"]');
+  const meta = els.scanHud.querySelector('[data-role="hud-meta"]');
+  const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
+  if (name) name.textContent = product.name;
+  if (meta) meta.textContent = productSubtitle(product);
+  if (lookup) lookup.textContent = "Existing product selected. Save & Next will remember this barcode.";
+  els.unknownDialog.close();
+  pulse("Product selected");
 }
 
 async function enrichUnknownProduct(product) {
@@ -1151,6 +1204,7 @@ async function openUnknownDescription(product = state.pendingUnknownProduct || s
   els.unknownBarcodeText.textContent = `Barcode ${product.barcode}`;
   els.unknownNameInput.value = product.name?.startsWith("Draft ") ? "" : product.name;
   els.unknownBinInput.value = product.bin || "";
+  renderUnknownProductSuggestions();
   els.unknownDialog.showModal();
   els.unknownNameInput.focus();
 }
@@ -1946,6 +2000,11 @@ function bindEvents() {
     }
   });
   els.saveUnknownButton.addEventListener("click", saveUnknownDescription);
+  els.unknownNameInput.addEventListener("input", renderUnknownProductSuggestions);
+  els.unknownProductSuggestions.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-action="choose-existing-product"]');
+    if (button) chooseExistingProductForUnknown(Number(button.dataset.index));
+  });
   els.unknownNameInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
