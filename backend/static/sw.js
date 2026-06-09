@@ -3,13 +3,13 @@ const APP_SHELL = [
   "/",
   "/index.html",
   "/mapping.html",
-  "/styles.css?v=raw-export-1",
-  "/app.js?v=raw-export-1",
+  "/styles.css?v=typed-pw-suggest-1",
+  "/app.js?v=typed-pw-suggest-1",
   "/mapping.js?v=phone-mapping-4",
-  "/frontend-utils.js?v=raw-export-1",
+  "/frontend-utils.js?v=typed-pw-suggest-1",
   "/frontend-utils.js?v=phone-mapping-4",
   "/manifest.webmanifest",
-  "/vendor/zxing-library.min.js?v=raw-export-1"
+  "/vendor/zxing-library.min.js?v=typed-pw-suggest-1"
 ];
 
 self.addEventListener("install", (event) => {

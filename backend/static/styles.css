@@ -480,6 +480,32 @@ dialog {
   color: #cbd5e1;
   font-size: 13px;
 }
+.unknown-suggestions {
+  display: grid;
+  gap: 7px;
+}
+.unknown-suggestions p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.unknown-suggestions button {
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid #0f766e;
+  background: #102f32;
+  color: #f8fafc;
+  text-align: left;
+}
+.unknown-suggestions strong,
+.unknown-suggestions small {
+  display: block;
+}
+.unknown-suggestions small {
+  margin-top: 3px;
+  color: #99f6e4;
+  font-size: 11px;
+}
 .confirm-shell button:first-of-type,
 #saveUnknownButton {
   background: #16a34a;

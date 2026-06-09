@@ -475,6 +475,26 @@ def scanner_lookup_product(barcode: str) -> dict:
         )
     return {"barcode": barcode, "exists": False, "suggested": suggestion, "procurewizard_matches": pw_matches}
 
+@router.get("/products/matches")
+def scanner_product_matches(
+    name: str = "",
+    category: str = "",
+    size: str = "",
+    limit: int = 5,
+) -> dict:
+    name = normalize_identifier(name)
+    if len(name) < 3:
+        return {"matches": []}
+    with get_db() as db:
+        matches = active_procurewizard_matches(
+            db,
+            {"name": name, "category": category, "size": size},
+            limit=limit,
+            min_score=0.28,
+            require_name_tokens=True,
+        )
+    return {"matches": matches}
+
 @router.post("/products")
 def upsert_product(request: ProductUpsertRequest, _: None = Depends(require_admin)) -> dict:
     init_db()

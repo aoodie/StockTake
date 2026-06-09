@@ -162,6 +162,8 @@ def active_procurewizard_matches(
     db: Connection,
     product: dict[str, Any],
     limit: int = 5,
+    min_score: float = 0.38,
+    require_name_tokens: bool = False,
 ) -> list[dict[str, Any]]:
     rows = db.execute(
         """
@@ -175,8 +177,13 @@ def active_procurewizard_matches(
         """
     ).fetchall()
     matches: list[dict[str, Any]] = []
+    product_name_tokens = set(normalize_match_text(product.get("name") or "").split())
     for item in rows:
         row = dict(item)
+        if require_name_tokens:
+            row_name_tokens = set(normalize_match_text(row["description"]).split())
+            if not product_name_tokens.issubset(row_name_tokens):
+                continue
         score, reason = product_match_score(
             {
                 "description": row["description"],
@@ -185,7 +192,7 @@ def active_procurewizard_matches(
             },
             product,
         )
-        if score < 0.38 or not row["id"]:
+        if score < min_score or not row["id"]:
             continue
         matches.append(
             {

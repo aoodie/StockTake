@@ -13,9 +13,9 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for raw export rollout", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=raw-export-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=raw-export-1/);
+test("scanner build cache is bumped for typed PW suggestions", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=typed-pw-suggest-1/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=typed-pw-suggest-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);
@@ -40,6 +40,12 @@ test("unknown description suggests existing catalog products", () => {
   assert.match(appSource, /Start typing a product name/);
   assert.match(appSource, /No existing products match/);
   assert.match(appSource, /Save & Next will remember this barcode/);
+});
+
+test("typed unknown description searches ProcureWizard matches", () => {
+  assert.match(appSource, /suggestUnknownDescription/);
+  assert.match(appSource, /\/products\/matches\?name=/);
+  assert.match(appSource, /data-action="choose-unknown-pw"/);
 });
 
 test("IndexedDB state uses an explicit serializable allowlist", () => {

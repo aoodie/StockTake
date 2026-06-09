@@ -316,6 +316,44 @@ def test_scanner_lookup_returns_procurewizard_matches(tmp_path, monkeypatch):
     assert response.json()["procurewizard_matches"][0]["score"] >= 0.9
 
 
+def test_typed_description_returns_procurewizard_suggestions(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO procurewizard_imports
+                (id, filename, encoding, metadata_json, header_json, row_count, active, created_at)
+            VALUES ('pw-active', 'pw.csv', 'utf-8', '[]', '[]', 1, 1, '2026-06-09')
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO products
+                (id, barcode, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('procurewizard-200', '200', 'Monkey 47 Schwarzwald Dry Gin', 'Gin', '50cl', 'case', 'confirmed', '2026-06-09')
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO procurewizard_rows
+                (id, import_id, row_index, pid, category, description, pack_size, raw_json,
+                 product_id, match_status, match_score, created_at, updated_at)
+            VALUES ('pw-row-2', 'pw-active', 2, '200', 'Gin', 'Monkey 47 Schwarzwald Dry Gin',
+                    '6 x 50cl', '[]', 'procurewizard-200', 'imported', 1, '2026-06-09', '2026-06-09')
+            """
+        )
+        db.commit()
+    client = TestClient(app)
+
+    response = client.get("/products/matches", params={"name": "Monkey 47"})
+
+    assert response.status_code == 200
+    assert response.json()["matches"][0]["product"]["id"] == "procurewizard-200"
+    assert all("Monkey" in match["description"] for match in response.json()["matches"])
+
+
 def test_raw_scanned_export_includes_unmapped_draft_without_admin(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")

@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=raw-export-1";
+} from "./frontend-utils.js?v=typed-pw-suggest-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -75,6 +75,7 @@ const els = {
   unknownBarcodeText: document.querySelector("#unknownBarcodeText"),
   unknownNameInput: document.querySelector("#unknownNameInput"),
   unknownProductSuggestions: document.querySelector("#unknownProductSuggestions"),
+  unknownSuggestions: document.querySelector("#unknownSuggestions"),
   unknownBinInput: document.querySelector("#unknownBinInput"),
   saveUnknownButton: document.querySelector("#saveUnknownButton"),
   confirmDialog: document.querySelector("#confirmDialog"),
@@ -204,6 +205,7 @@ let state = {
   awaitingNextScan: false,
   lookupGeneration: 0,
   procurewizardMatches: [],
+  unknownSuggestionMatches: [],
   stream: null,
   scanLoopActive: false,
   inactivityTimer: null,
@@ -340,6 +342,7 @@ async function restoreState() {
       awaitingNextScan: false,
       lookupGeneration: state.lookupGeneration + 1,
       procurewizardMatches: [],
+      unknownSuggestionMatches: [],
       scanInFlight: false,
       scanLoopActive: false
     };
@@ -768,7 +771,7 @@ async function enrichUnknownProduct(product) {
     const result = await response.json();
     if (generation !== state.lookupGeneration || state.currentProduct?.barcode !== product.barcode) return;
     let updated = product;
-    let status = "No confident online match. Saved for admin review.";
+    let status = "No public description found. Tap Describe and type a few words to search the ProcureWizard list.";
     if (result.exists && result.product) {
       updated = normalProduct(result.product);
       status = "Matched an existing catalog product.";
@@ -1227,8 +1230,38 @@ async function openUnknownDescription(product = state.pendingUnknownProduct || s
   els.unknownNameInput.value = product.name?.startsWith("Draft ") ? "" : product.name;
   els.unknownBinInput.value = product.bin || "";
   renderUnknownProductSuggestions();
+  els.unknownSuggestions.innerHTML = `<p>Type at least 3 characters to search ProcureWizard descriptions.</p>`;
+  state.unknownSuggestionMatches = [];
   els.unknownDialog.showModal();
   els.unknownNameInput.focus();
+}
+
+async function suggestUnknownDescription() {
+  clearTimeout(suggestUnknownDescription.timer);
+  const query = els.unknownNameInput.value.trim();
+  if (query.length < 3) {
+    state.unknownSuggestionMatches = [];
+    els.unknownSuggestions.innerHTML = `<p>Type at least 3 characters to search ProcureWizard descriptions.</p>`;
+    return;
+  }
+  suggestUnknownDescription.timer = setTimeout(async () => {
+    try {
+      const response = await fetch(`/products/matches?name=${encodeURIComponent(query)}&limit=5`);
+      if (!response.ok) throw new Error("Match lookup failed");
+      const result = await response.json();
+      state.unknownSuggestionMatches = result.matches || [];
+      els.unknownSuggestions.innerHTML = state.unknownSuggestionMatches.length
+        ? state.unknownSuggestionMatches.map((match, index) => `
+          <button data-action="choose-unknown-pw" data-index="${index}" type="button">
+            <strong>${escapeHtml(match.description || match.product?.name || "PW product")}</strong>
+            <small>BIN ${escapeHtml(match.bin_number || "-")} · ${escapeHtml(match.pack_size || "-")} · ${Math.round(Number(match.score || 0) * 100)}% match</small>
+          </button>
+        `).join("")
+        : `<p>No close ProcureWizard descriptions found. Save your description for admin review.</p>`;
+    } catch {
+      els.unknownSuggestions.innerHTML = `<p>ProcureWizard suggestions unavailable. You can still save the description.</p>`;
+    }
+  }, 250);
 }
 
 async function saveUnknownDescription() {
@@ -1514,7 +1547,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=raw-export-1";
+    script.src = "/vendor/zxing-library.min.js?v=typed-pw-suggest-1";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -2032,6 +2065,16 @@ function bindEvents() {
       event.preventDefault();
       saveUnknownDescription();
     }
+  });
+  els.unknownNameInput.addEventListener("input", suggestUnknownDescription);
+  els.unknownSuggestions.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-action="choose-unknown-pw"]');
+    if (!button) return;
+    const match = state.unknownSuggestionMatches[Number(button.dataset.index)];
+    if (!match) return;
+    state.procurewizardMatches = [match];
+    chooseProcureWizardMatch(0);
+    els.unknownDialog.close();
   });
   els.undoButton.addEventListener("click", undoLastScan);
   els.linesButton.addEventListener("click", async () => {
