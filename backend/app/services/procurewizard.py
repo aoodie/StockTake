@@ -45,13 +45,30 @@ def decode_csv_bytes(data: bytes) -> tuple[str, str]:
 
 def parse_procurewizard_csv_text(text: str, encoding: str = "text") -> ProcureWizardParseResult:
     rows = list(csv.reader(io.StringIO(text, newline="")))
-    if len(rows) < 2:
-        raise ValueError("ProcureWizard CSV must include metadata and header rows.")
-    if rows[1] != PW_HEADER:
+    if not rows:
+        raise ValueError("ProcureWizard CSV must include a header row.")
+    if rows[0] == PW_HEADER:
+        metadata: list[str] = []
+        header = rows[0]
+        data_rows = rows[1:]
+        first_data_row_number = 2
+    elif len(rows) >= 2 and rows[1] == PW_HEADER:
+        metadata = rows[0]
+        header = rows[1]
+        data_rows = rows[2:]
+        first_data_row_number = 3
+    else:
         raise ValueError("CSV header does not match the expected ProcureWizard stocktake template.")
-    if any(len(row) != len(PW_HEADER) for row in rows):
-        raise ValueError("Every ProcureWizard CSV row must have exactly 10 columns.")
-    return ProcureWizardParseResult(encoding=encoding, metadata=rows[0], header=rows[1], rows=rows[2:])
+    for row_number, row in enumerate(data_rows, start=first_data_row_number):
+        if len(row) < len(PW_HEADER):
+            raise ValueError(
+                f"ProcureWizard CSV row {row_number} has fewer than the required 10 columns."
+            )
+        if any(value.strip() for value in row[len(PW_HEADER):]):
+            raise ValueError(
+                f"ProcureWizard CSV row {row_number} has unexpected data after column 10."
+            )
+    return ProcureWizardParseResult(encoding=encoding, metadata=metadata, header=header, rows=data_rows)
 
 
 def parse_procurewizard_csv_bytes(data: bytes) -> ProcureWizardParseResult:

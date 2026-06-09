@@ -28,6 +28,41 @@ def test_procurewizard_parser_accepts_cp1252_metadata_and_header():
     assert parsed.rows[1][4] == "Mirabeau Pure Rosé, Côtes de Provence"
 
 
+def test_procurewizard_parser_accepts_short_metadata_and_empty_trailing_column():
+    csv_text = (
+        "21041,939303,<-- Do not delete or edit\r\n"
+        "PID,[E]Bin number,[E]Pos,Tertiary Category,Brand & Description,Pack Size,Est FC,Est SC,[E]Close FC,[E]Close SC\r\n"
+        '"3862551","3862551","0","Bourbon / American Whiskey","Jack Daniels Rye","1 x 70 cl [1]","1","0","","",\r\n'
+    )
+
+    parsed = parse_procurewizard_csv_bytes(csv_text.encode("cp1252"))
+
+    assert len(parsed.metadata) == 3
+    assert len(parsed.rows[0]) == 11
+    assert parsed.rows[0][10] == ""
+
+
+def test_procurewizard_parser_accepts_header_without_metadata():
+    csv_text = "\r\n".join(sample_csv().splitlines()[1:]) + "\r\n"
+
+    parsed = parse_procurewizard_csv_bytes(csv_text.encode("cp1252"))
+
+    assert parsed.metadata == []
+    assert parsed.header[0] == "PID"
+    assert len(parsed.rows) == 2
+
+
+def test_procurewizard_parser_rejects_non_empty_trailing_column():
+    csv_text = sample_csv().replace("0,0,,\r\n", "0,0,,,unexpected\r\n", 1)
+
+    try:
+        parse_procurewizard_csv_bytes(csv_text.encode("cp1252"))
+    except ValueError as exc:
+        assert str(exc) == "ProcureWizard CSV row 3 has unexpected data after column 10."
+    else:
+        raise AssertionError("Expected non-empty trailing column to be rejected")
+
+
 def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
