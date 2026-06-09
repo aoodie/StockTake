@@ -475,6 +475,11 @@ dialog {
 .unknown-product-suggestions small {
   color: #bfdbfe;
 }
+.unknown-product-suggestions p {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 13px;
+}
 .confirm-shell button:first-of-type,
 #saveUnknownButton {
   background: #16a34a;

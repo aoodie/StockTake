@@ -20,6 +20,7 @@ const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
 const SESSION_MEMORY_PREFIX = "stocktake-session";
 const productIndex = new Map();
+let catalogProducts = [];
 let catalogSessions = [];
 let catalogLocations = [];
 
@@ -351,8 +352,9 @@ async function syncCatalog() {
     if (!response.ok) throw new Error("Catalog failed");
     const catalog = await response.json();
     productIndex.clear();
-    for (const product of catalog.products) {
-      await cacheProduct(normalProduct(product));
+    catalogProducts = catalog.products.map(normalProduct);
+    for (const product of catalogProducts) {
+      await cacheProduct(product);
     }
     catalogSessions = catalog.sessions || [];
     catalogLocations = catalog.locations || [];
@@ -372,7 +374,8 @@ async function syncCatalog() {
 
 async function loadProductIndex() {
   productIndex.clear();
-  for (const product of await all("products")) {
+  catalogProducts = await all("products");
+  for (const product of catalogProducts) {
     indexProduct(product);
   }
 }
@@ -690,25 +693,44 @@ async function chooseProcureWizardMatch(index) {
 function matchingCatalogProducts(query) {
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
-  const seen = new Set();
-  return [...productIndex.values()]
-    .filter((product) => {
-      if (!product?.id || product.draft_status === "draft" || seen.has(product.id)) return false;
-      seen.add(product.id);
+  return catalogProducts
+    .filter((product) => product?.id && product.draft_status !== "draft")
+    .map((product) => {
+      const name = (product.name || "").toLowerCase();
       const search = [product.name, product.category, product.size, product.bin].filter(Boolean).join(" ").toLowerCase();
-      return terms.every((term) => search.includes(term));
+      const words = search.split(/[^a-z0-9]+/).filter(Boolean);
+      const scores = terms.map((term) => {
+        if (name.includes(term)) return 4;
+        if (words.some((word) => word.startsWith(term))) return 3;
+        if (search.includes(term)) return 2;
+        return 0;
+      });
+      return { product, score: scores.reduce((total, score) => total + score, 0), matches: scores.every(Boolean) };
     })
+    .filter((entry) => entry.matches)
+    .sort((left, right) => right.score - left.score || left.product.name.localeCompare(right.product.name))
+    .map((entry) => entry.product)
     .slice(0, 6);
 }
 
 function renderUnknownProductSuggestions() {
-  const matches = matchingCatalogProducts(els.unknownNameInput.value);
-  els.unknownProductSuggestions.innerHTML = matches.map((product, index) => `
+  const query = els.unknownNameInput.value.trim();
+  const matches = matchingCatalogProducts(query);
+  if (!query) {
+    els.unknownProductSuggestions.innerHTML = `<p>Start typing a product name to search ${catalogProducts.filter((product) => product.draft_status !== "draft").length} existing products.</p>`;
+  } else if (!matches.length) {
+    els.unknownProductSuggestions.innerHTML = `<p>No existing products match “${escapeHtml(query)}”. Keep typing or save it as a new description.</p>`;
+  } else {
+    els.unknownProductSuggestions.innerHTML = `
+      <p>Choose an existing product:</p>
+      ${matches.map((product, index) => `
     <button data-action="choose-existing-product" data-index="${index}" type="button">
       <strong>${escapeHtml(product.name)}</strong>
       <small>${escapeHtml(productSubtitle(product))}</small>
     </button>
-  `).join("");
+      `).join("")}
+    `;
+  }
   els.unknownProductSuggestions._matches = matches;
 }
 

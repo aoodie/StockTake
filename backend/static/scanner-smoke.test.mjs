@@ -35,7 +35,10 @@ test("unknown scan can choose a ProcureWizard match before saving", () => {
 
 test("unknown description suggests existing catalog products", () => {
   assert.match(appSource, /matchingCatalogProducts/);
+  assert.match(appSource, /catalogProducts/);
   assert.match(appSource, /data-action="choose-existing-product"/);
+  assert.match(appSource, /Start typing a product name/);
+  assert.match(appSource, /No existing products match/);
   assert.match(appSource, /Save & Next will remember this barcode/);
 });
 
