@@ -986,22 +986,25 @@ async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
     }
     els.pwRows.innerHTML = (data.rows || []).slice(0, 30).map((row) => `
       <article class="task-row pw-row">
-        <div>
-          <h3>${escapeHtml(row.description)}</h3>
-          <p class="meta-details">
-            <span><strong>PID:</strong> ${escapeHtml(row.pid)}</span>
-            <span><strong>BIN:</strong> ${escapeHtml(row.bin_number || "None")}</span>
-            <span><strong>Pack:</strong> ${escapeHtml(row.pack_size || "None")}</span>
-            <span><strong>Category:</strong> ${escapeHtml(row.category || "None")}</span>
-          </p>
-          <p class="meta-details">
-            <span><strong>Linked:</strong> ${escapeHtml(row.product_name || row.product_id || "None")}</span>
-            <span><strong>Reason:</strong> ${escapeHtml(row.match_reason || "-")}</span>
-          </p>
+        <div class="pw-row-main">
+          <div class="pw-row-heading">
+            <h3>${escapeHtml(row.description)}</h3>
+            ${statusBadge(row.match_status)}
+          </div>
+          <dl class="pw-row-details">
+            <div><dt>PID</dt><dd>${escapeHtml(row.pid)}</dd></div>
+            <div><dt>BIN</dt><dd>${escapeHtml(row.bin_number || "None")}</dd></div>
+            <div><dt>Pack</dt><dd>${escapeHtml(row.pack_size || "None")}</dd></div>
+            <div><dt>Category</dt><dd>${escapeHtml(row.category || "None")}</dd></div>
+          </dl>
+          <p class="pw-linked-product"><strong>Linked product:</strong> ${escapeHtml(row.product_name || row.product_id || "None")}</p>
+          ${row.match_reason ? `<p class="pw-match-reason">${escapeHtml(row.match_reason)}</p>` : ""}
         </div>
-        ${statusBadge(row.match_status)}
         <div class="pw-link-controls">
-          <input value="${escapeHtml(row.product_id || "")}" data-pw-row-id="${escapeHtml(row.id)}" placeholder="product id">
+          <label>
+            Product ID
+            <input value="${escapeHtml(row.product_id || "")}" data-pw-row-id="${escapeHtml(row.id)}" placeholder="Search or enter product ID">
+          </label>
           <button class="secondary" data-action="link-pw-row" data-id="${escapeHtml(row.id)}" type="button">Link</button>
         </div>
       </article>

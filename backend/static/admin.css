@@ -392,13 +392,11 @@ label {
   gap: 10px;
   align-items: center;
 }
-.pw-row {
-  grid-template-columns: minmax(0, 1fr) auto minmax(240px, 0.35fr);
-}
 .pw-link-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 72px;
   gap: 8px;
+  align-items: end;
 }
 
 .ai-toolbar {
@@ -745,6 +743,67 @@ label {
 
 .task-row {
   grid-template-columns: 58px minmax(0, 1fr) auto auto;
+}
+.task-row.pw-row {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.42fr);
+  align-items: start;
+  gap: 24px;
+}
+.pw-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.pw-row-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.pw-row-heading h3 {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+.pw-row-heading .badge {
+  flex: none;
+}
+.pw-row-details {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.pw-row-details div {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+}
+.pw-row-details dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.pw-row-details dd {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.pw-linked-product,
+.pw-match-reason {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pw-linked-product strong {
+  color: var(--text-primary);
+}
+.pw-match-reason {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .data-row {
   grid-template-columns: auto 58px minmax(0, 1.2fr) minmax(80px, .4fr) minmax(120px, .6fr) auto auto;
@@ -1219,5 +1278,28 @@ dialog footer {
   }
   .compact-input {
     width: 100%;
+  }
+  .pw-import-row {
+    grid-template-columns: 1fr;
+  }
+  .pw-import-row > *,
+  .pw-link-controls button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 1250px) {
+  .task-row.pw-row {
+    grid-template-columns: 1fr;
+  }
+  .pw-link-controls {
+    grid-template-columns: minmax(0, 1fr) 96px;
+  }
+}
+
+@media (max-width: 850px) {
+  .pw-link-controls,
+  .pw-row-details {
+    grid-template-columns: 1fr;
   }
 }
