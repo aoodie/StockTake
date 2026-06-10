@@ -92,6 +92,7 @@ const els = {
   exportDialog: document.querySelector("#exportDialog"),
   exportSummary: document.querySelector("#exportSummary"),
   missingBinList: document.querySelector("#missingBinList"),
+  downloadRecoveryButton: document.querySelector("#downloadRecoveryButton"),
   downloadRawExportLink: document.querySelector("#downloadRawExportLink"),
   downloadExportLink: document.querySelector("#downloadExportLink")
 };
@@ -443,9 +444,7 @@ function renderLocations(locations) {
 
 function renderSessionChoices() {
   els.sessionPreset.innerHTML = "";
-  const sessions = catalogSessions.length ? catalogSessions : [
-    { id: `session-${today()}`, name: today(), period_date: today() }
-  ];
+  const sessions = [...catalogSessions].sort((a, b) => String(b.period_date).localeCompare(String(a.period_date)));
   for (const session of sessions) {
     const option = document.createElement("option");
     option.value = session.id;
@@ -455,8 +454,10 @@ function renderSessionChoices() {
     els.sessionPreset.append(option);
   }
   const active = sessions.find((session) => session.id === state.sessionId) || sessions[0];
-  els.sessionPreset.value = active.id;
-  els.sessionCodeInput.value = active.id;
+  if (active) {
+    els.sessionPreset.value = active.id;
+    els.sessionCodeInput.value = active.id;
+  }
 }
 
 function renderSessionHeader() {
@@ -471,19 +472,10 @@ function syncHeaders() {
   };
 }
 
-async function createSessionIfNeeded(sessionId, sessionName, period) {
-  try {
-    await fetch("/sessions", {
-      method: "POST",
-      headers: syncHeaders(),
-      body: JSON.stringify({ id: sessionId, name: sessionName, period_date: period })
-    });
-  } catch {
-    setSyncStatus("Session saved locally");
-  }
-}
-
 async function applySessionSelection(sessionId, sessionName, period, locationId, locationName, recordEvent = true) {
+  if (!catalogSessions.some((session) => session.id === sessionId)) {
+    throw new Error("Select an active server session");
+  }
   state.sessionId = sessionId;
   state.sessionName = sessionName || sessionId;
   state.period = period || today();
@@ -493,7 +485,6 @@ async function applySessionSelection(sessionId, sessionName, period, locationId,
   els.sessionLocationSelect.value = locationId;
   renderSessionHeader();
   writeSessionMemory();
-  await createSessionIfNeeded(state.sessionId, state.sessionName, state.period);
   if (recordEvent) {
     await enqueue("session_change", {
       session_id: state.sessionId,
@@ -508,7 +499,7 @@ async function applySessionSelection(sessionId, sessionName, period, locationId,
 async function showSessionDialog(force = false) {
   renderSessionChoices();
   const saved = !force ? readSessionMemory() : null;
-  if (saved) {
+  if (saved && catalogSessions.some((session) => session.id === saved.sessionId)) {
     state.restoredSession = true;
     await applySessionSelection(
       saved.sessionId,
@@ -520,14 +511,17 @@ async function showSessionDialog(force = false) {
     );
     return;
   }
+  els.startSessionButton.disabled = !catalogSessions.length;
+  if (!catalogSessions.length) setSyncStatus("No active session. Ask an admin to open one.");
   els.sessionDialog.returnValue = "";
   els.sessionDialog.showModal();
   await new Promise((resolve) => {
     const onStart = async () => {
       const selected = catalogSessions.find((session) => session.id === els.sessionPreset.value);
-      const sessionId = normalizeBarcode(els.sessionCodeInput.value || els.sessionPreset.value || `session-${today()}`);
-      const sessionName = selected?.id === sessionId ? selected.name : sessionId;
-      const period = selected?.id === sessionId ? selected.period_date : today();
+      if (!selected) return;
+      const sessionId = selected.id;
+      const sessionName = selected.name;
+      const period = selected.period_date;
       const locationId = els.sessionLocationSelect.value || state.locationId;
       const locationName = els.sessionLocationSelect.selectedOptions[0]?.textContent || locationId;
       els.sessionDialog.close("started");
@@ -980,7 +974,10 @@ async function enqueue(eventType, payload) {
 }
 
 async function syncEvents() {
-  const events = (await all("events")).filter((event) => event.sync_status !== "synced").slice(0, 50);
+  const events = (await all("events"))
+    .filter((event) => ["pending", "failed"].includes(event.sync_status))
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .slice(0, 50);
   if (!events.length) {
     setSyncStatus("All synced");
     return;
@@ -997,8 +994,12 @@ async function syncEvents() {
     for (const item of result.events) {
       const event = await get("events", item.local_id);
       if (event) {
-        await put("events", { ...event, sync_status: "synced", server_id: item.server_id });
-        await markLocalLineSynced(event);
+        if (item.status === "rejected") {
+          await put("events", { ...event, sync_status: "quarantined", sync_error: item.error || "Rejected by server" });
+        } else {
+          await put("events", { ...event, sync_status: "synced", server_id: item.server_id });
+          await markLocalLineSynced(event);
+        }
       }
     }
     state.lastSyncAt = new Date().toISOString();
@@ -1022,8 +1023,11 @@ async function updateSyncSummary(prefix = "") {
   const events = await all("events");
   const pending = events.filter((event) => event.sync_status !== "synced").length;
   const failed = events.filter((event) => event.sync_status === "failed").length;
+  const quarantined = events.filter((event) => event.sync_status === "quarantined").length;
   const synced = events.filter((event) => event.sync_status === "synced").length;
-  const label = pending ? `${pending} queued${failed ? `, ${failed} failed` : ""}` : `${synced} synced`;
+  const label = pending
+    ? `${pending} queued${failed ? `, ${failed} failed` : ""}${quarantined ? `, ${quarantined} needs review` : ""}`
+    : `${synced} synced`;
   setSyncStatus(prefix ? `${prefix} / ${label}` : label);
 }
 
@@ -1052,7 +1056,15 @@ function renderProduct(product) {
   els.productName.textContent = product.name;
   els.productMeta.textContent = [product.category || "Uncategorised", product.size].filter(Boolean).join(" | ");
   els.productBin.textContent = `BIN: ${product.bin || "Missing"}`;
-  els.productPhoto.innerHTML = product.photo_url ? `<img alt="" src="${product.photo_url}">` : "Photo";
+  els.productPhoto.replaceChildren();
+  if (product.photo_url) {
+    const image = document.createElement("img");
+    image.alt = "";
+    image.src = product.photo_url;
+    els.productPhoto.append(image);
+  } else {
+    els.productPhoto.textContent = "Photo";
+  }
 }
 
 function clearProductCard() {
@@ -1990,6 +2002,30 @@ async function showExportReview() {
   }
 }
 
+function csvCell(value) {
+  const text = String(value ?? "");
+  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safe.replaceAll('"', '""')}"`;
+}
+
+async function downloadLocalRecovery() {
+  const lines = (await all("lines")).filter((line) => line.session_id === state.sessionId);
+  const events = (await all("events")).filter((event) => event.session_id === state.sessionId && event.sync_status !== "synced");
+  const rows = [["record_type", "session_id", "location_id", "id", "barcode", "product_name", "quantity", "sync_status", "created_at", "error"].map(csvCell).join(",")];
+  for (const line of lines) {
+    rows.push(["line", line.session_id, line.location_id, line.id, line.barcode, line.product_name, line.quantity_decimal, line.sync_status, line.counted_at, ""].map(csvCell).join(","));
+  }
+  for (const event of events) {
+    rows.push(["event", event.session_id, event.location_id, event.local_id, event.payload?.barcode || "", event.payload?.product_name || "", event.payload?.quantity_decimal || "", event.sync_status, event.created_at, event.sync_error || ""].map(csvCell).join(","));
+  }
+  const url = URL.createObjectURL(new Blob([`\ufeff${rows.join("\r\n")}`], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `stocktake-${state.sessionId}-local-recovery.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function bindEvents() {
   els.sessionDialog.addEventListener("cancel", (event) => event.preventDefault());
   els.multiMode.addEventListener("click", () => setMode("multi"));
@@ -2177,6 +2213,7 @@ function bindEvents() {
     if (!state.scanLoopActive) startScanLoop();
   });
   els.exportButton.addEventListener("click", showExportReview);
+  els.downloadRecoveryButton.addEventListener("click", downloadLocalRecovery);
   els.diagnosticsButton.addEventListener("click", () => {
     renderDiagnostics();
     els.diagnosticsDialog.showModal();

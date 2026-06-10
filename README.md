@@ -27,6 +27,8 @@ The web app implements:
 - Undo last scan.
 - Scanner sleep state for battery safety.
 - PWA app shell caching for poor-connectivity cellars.
+- Chronological per-event sync with rejected-event quarantine and local recovery CSV.
+- Controlled session lifecycle so closed or archived sessions cannot accept new counts.
 
 Open [https://stock.aoodie.xyz](https://stock.aoodie.xyz) from a phone browser. Camera barcode scanning requires HTTPS in production.
 If the browser does not support `BarcodeDetector`, the manual barcode field still works.
@@ -52,6 +54,7 @@ Important endpoints:
 - `POST /sessions`: creates/updates a stocktake session code.
 - `POST /sync/events`: accepts queued browser events idempotently.
 - `GET /export/{session_id}`: downloads the locked v1 Excel workbook.
+- `GET /export/scanned/{session_id}`: downloads all scanned lines without requiring product mapping.
 - `GET /pre-export/{session_id}`: shows missing BIN validation counts.
 - `GET /pre-export/{session_id}/missing-bin`: lists rows needing BIN cleanup.
 - `PATCH /products/{product_id}/bin`: quick BIN update for validation cleanup.
@@ -65,6 +68,9 @@ Excel export columns:
 ## Admin and enrichment
 
 Unknown scanned barcodes create draft products and product tasks. Open `/admin` from a desktop browser to review tasks, run online enrichment, approve product details, manage sessions, and run export preflight checks.
+
+Sessions use the lifecycle `draft -> open -> counting -> review -> approved -> exported -> archived`.
+Only `open` and `counting` sessions accept new phone counts. Archiving preserves counts and audit history.
 
 Set these environment variables in production:
 
@@ -89,3 +95,4 @@ Recommended setup:
 - Put Nginx/Caddy in front of it for HTTPS.
 - Proxy `https://stock.aoodie.xyz` to `http://127.0.0.1:8099`.
 - Ensure the TLS certificate is valid; mobile camera access will not work reliably over plain HTTP.
+- Monitor `GET /health` and run `deploy/backup_vps.sh` on a daily off-VPS backup schedule.

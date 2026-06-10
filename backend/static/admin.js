@@ -888,18 +888,26 @@ async function loadSessions() {
     const data = await api("/admin/api/sessions");
     state.sessions = data.sessions;
     els.sessionList.innerHTML = state.sessions.map((session) => `
-      <article class="data-row" style="grid-template-columns: minmax(0, 1fr) auto auto;">
+      <article class="data-row" data-session-id="${escapeHtml(session.id)}" style="grid-template-columns: minmax(0, 1fr) auto auto auto;">
         <div>
           <h3>${escapeHtml(session.name)}</h3>
           <p class="meta-details">
             <span><strong>ID:</strong> ${escapeHtml(session.id)}</span>
             <span><strong>Date:</strong> ${escapeHtml(session.period_date)}</span>
+            <span><strong>Devices:</strong> ${escapeHtml(session.device_count)}</span>
+            <span><strong>Last count:</strong> ${escapeHtml(session.last_counted_at || "None")}</span>
           </p>
         </div>
         <span class="badge">${escapeHtml(session.line_count)} lines</span>
+        <select data-session-status data-id="${escapeHtml(session.id)}">
+          ${["draft", "open", "counting", "review", "approved", "exported", "archived"].map((status) => (
+            `<option value="${status}" ${status === session.status ? "selected" : ""}>${status}</option>`
+          )).join("")}
+        </select>
         <div style="display:flex; gap:8px;">
+          <button class="secondary" data-action="update-session-status" data-id="${escapeHtml(session.id)}" type="button">Update</button>
           <button class="primary-btn" data-action="export-session" data-id="${escapeHtml(session.id)}" type="button">Review Export</button>
-          <button class="warning" data-action="delete-session" data-id="${escapeHtml(session.id)}" type="button">Delete</button>
+          <button class="warning" data-action="delete-session" data-id="${escapeHtml(session.id)}" type="button">Archive</button>
         </div>
       </article>
     `).join("");
@@ -1646,16 +1654,30 @@ function bindEvents() {
     }
     
     if (button.dataset.action === "delete-session") {
-      if (!(await confirmDialog("Delete session", "Delete this session and all its stocktake line counts? This cannot be undone.", "Delete"))) return;
+      if (!(await confirmDialog("Archive session", "Archive this session? Counts and audit history will be preserved.", "Archive"))) return;
       try {
         await api(`/admin/api/sessions/${encodeURIComponent(id)}`, {
           method: "DELETE"
         });
-        showToast("Session deleted successfully");
+        showToast("Session archived");
         await loadSessions();
         await loadDashboard();
       } catch (err) {
         showToast(err.message, 'error');
+      }
+    }
+
+    if (button.dataset.action === "update-session-status") {
+      const select = button.closest("[data-session-id]").querySelector("[data-session-status]");
+      try {
+        await api(`/admin/api/sessions/${encodeURIComponent(id)}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: select.value, reason: "Updated from admin session control" })
+        });
+        showToast("Session status updated");
+        await loadSessions();
+      } catch (err) {
+        showToast(err.message, "error");
       }
     }
   });

@@ -31,7 +31,7 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=export-workflow-1" in response.text
+    assert "admin.js?v=session-lifecycle-1" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -955,3 +955,36 @@ def test_admin_can_change_openai_model_and_token_setting(tmp_path, monkeypatch):
     assert cleared.status_code == 200
     assert cleared.json()["has_openai_key"] is False
     assert enrichment.openai_api_key() == ""
+
+
+def test_bin_cleanup_does_not_approve_draft_and_session_archive_preserves_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, bin, name, unit, draft_status, product_updated_at)
+            VALUES ('draft-1', '123', '', 'Draft', 'each', 'draft', ?)
+            """,
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        db.execute("INSERT INTO sessions (id, name, period_date, status) VALUES ('s1', 'Trial', '2026-06-10', 'open')")
+        db.execute(
+            """
+            INSERT INTO stocktake_lines
+                (id, session_id, quantity_decimal, draft_status, counted_at, device_id)
+            VALUES ('line-1', 's1', '1', 'confirmed', ?, 'phone-a')
+            """,
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        db.commit()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+    assert client.patch("/products/draft-1/bin", json={"bin": "A-1"}).status_code == 200
+    assert client.delete("/admin/api/sessions/s1").status_code == 200
+    with database.get_db() as db:
+        assert db.execute("SELECT draft_status FROM products WHERE id = 'draft-1'").fetchone()["draft_status"] == "draft"
+        assert db.execute("SELECT status FROM sessions WHERE id = 's1'").fetchone()["status"] == "archived"
+        assert db.execute("SELECT COUNT(*) AS c FROM stocktake_lines WHERE session_id = 's1'").fetchone()["c"] == 1

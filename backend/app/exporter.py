@@ -25,6 +25,11 @@ EXPORT_COLUMNS = [
     "Notes",
 ]
 
+def spreadsheet_safe(value):
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+        return f"'{value}"
+    return value
+
 
 def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_snapshots: bool = False) -> bytes:
     workbook = Workbook()
@@ -71,7 +76,7 @@ def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_sna
     ).fetchall()
 
     for row in rows:
-        values = list(row)
+        values = [spreadsheet_safe(value) for value in row]
         # Preserve explicit zero as "0"; never convert falsey quantities to blanks.
         if values[8] == "":
             values[8] = "0"

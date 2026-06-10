@@ -3,10 +3,10 @@ from typing import Any, Literal
 from datetime import datetime
 
 class SyncEvent(BaseModel):
-    local_id: str
-    device_id: str
-    session_id: str
-    location_id: str | None = None
+    local_id: str = Field(min_length=1, max_length=160)
+    device_id: str = Field(min_length=1, max_length=160)
+    session_id: str = Field(min_length=1, max_length=160)
+    location_id: str | None = Field(default=None, max_length=160)
     event_type: Literal[
         "scan",
         "quantity_edit",
@@ -19,10 +19,10 @@ class SyncEvent(BaseModel):
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
-    idempotency_key: str
+    idempotency_key: str = Field(min_length=1, max_length=320)
 
 class SyncRequest(BaseModel):
-    events: list[SyncEvent]
+    events: list[SyncEvent] = Field(max_length=100)
 
 class LoginRequest(BaseModel):
     password: str = Field(min_length=1)
@@ -54,9 +54,13 @@ class ProductPatchRequest(BaseModel):
     draft_status: Literal["confirmed", "draft"] | None = None
 
 class SessionCreateRequest(BaseModel):
-    id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    period_date: str = Field(min_length=1)
+    id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=160)
+    period_date: str = Field(min_length=1, max_length=20)
+
+class SessionStatusRequest(BaseModel):
+    status: Literal["draft", "open", "counting", "review", "approved", "exported", "archived"]
+    reason: str = Field(default="", max_length=500)
 
 class TaskPatchRequest(BaseModel):
     status: Literal["queued", "enriching", "review_needed", "approved", "failed"] | None = None

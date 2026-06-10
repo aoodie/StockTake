@@ -250,6 +250,15 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
                     is_primary=not existing_product or not normalize_identifier(existing_product["barcode"]),
                 )
 
+        line_id = payload.get("line_id", server_id)
+        existing_line = db.execute(
+            "SELECT device_id, session_id FROM stocktake_lines WHERE id = ?",
+            (line_id,),
+        ).fetchone()
+        if existing_line and (
+            existing_line["device_id"] != event.device_id or existing_line["session_id"] != event.session_id
+        ):
+            raise ValueError("Line belongs to another device or session")
         db.execute(
             """
             INSERT OR REPLACE INTO stocktake_lines (
@@ -259,7 +268,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                payload.get("line_id", server_id),
+                line_id,
                 event.session_id,
                 event.location_id,
                 product_id,
@@ -279,8 +288,12 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
         if not line_id:
             return task_ids
         current = db.execute(
-            "SELECT quantity_decimal FROM stocktake_lines WHERE id = ?", (line_id,)
+            "SELECT quantity_decimal, device_id, session_id FROM stocktake_lines WHERE id = ?", (line_id,)
         ).fetchone()
+        if not current:
+            raise ValueError("Line not found")
+        if current["device_id"] != event.device_id or current["session_id"] != event.session_id:
+            raise ValueError("Line belongs to another device or session")
         original = str(payload.get("original_quantity", current["quantity_decimal"] if current else "0"))
         new = normalize_event_quantity(payload.get("new_quantity", "0"))
         db.execute("UPDATE stocktake_lines SET quantity_decimal = ? WHERE id = ?", (new, line_id))
@@ -297,6 +310,14 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
     elif event.event_type in ("undo_scan", "delete_line"):
         line_id = payload.get("line_id")
         if line_id:
+            current = db.execute(
+                "SELECT device_id, session_id FROM stocktake_lines WHERE id = ?",
+                (line_id,),
+            ).fetchone()
+            if not current:
+                raise ValueError("Line not found")
+            if current["device_id"] != event.device_id or current["session_id"] != event.session_id:
+                raise ValueError("Line belongs to another device or session")
             db.execute("DELETE FROM stocktake_lines WHERE id = ?", (line_id,))
 
     elif event.event_type == "draft_product":
@@ -341,6 +362,15 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
 
     return task_ids
 
+def validate_counting_session(db: sqlite3.Connection, event: SyncEvent) -> None:
+    if event.event_type not in {"scan", "quantity_edit", "undo_scan", "delete_line"}:
+        return
+    session = db.execute("SELECT status FROM sessions WHERE id = ?", (event.session_id,)).fetchone()
+    if not session:
+        raise ValueError("Session does not exist; select an active server session")
+    if session["status"] not in {"open", "counting"}:
+        raise ValueError(f"Session is {session['status']} and cannot accept counts")
+
 @router.post("/sync/events")
 def sync_events(
     request: SyncRequest,
@@ -351,7 +381,12 @@ def sync_events(
     results = []
     task_ids: list[str] = []
     with get_db() as db:
-        for event in request.events:
+        event_priority = {"scan": 0, "draft_product": 0, "photo_capture": 1, "quantity_edit": 2, "undo_scan": 3, "delete_line": 3}
+        ordered_events = sorted(
+            request.events,
+            key=lambda event: (event.created_at, event_priority.get(event.event_type, 1), event.local_id),
+        )
+        for event in ordered_events:
             existing = db.execute(
                 "SELECT server_id FROM synced_events WHERE idempotency_key = ?",
                 (event.idempotency_key,),
@@ -367,29 +402,50 @@ def sync_events(
                 continue
 
             server_id = f"srv_{event.local_id}"
-            task_ids.extend(apply_event(db, event, server_id))
-            db.execute(
-                """
-                INSERT INTO synced_events (
-                    idempotency_key, local_id, server_id, device_id, session_id, location_id,
-                    event_type, payload_json, created_at, received_at
+            db.execute("SAVEPOINT sync_event")
+            try:
+                validate_counting_session(db, event)
+                task_ids.extend(apply_event(db, event, server_id))
+                db.execute(
+                    """
+                    INSERT INTO synced_events (
+                        idempotency_key, local_id, server_id, device_id, session_id, location_id,
+                        event_type, payload_json, created_at, received_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.idempotency_key,
+                        event.local_id,
+                        server_id,
+                        event.device_id,
+                        event.session_id,
+                        event.location_id,
+                        event.event_type,
+                        json.dumps(event.payload, separators=(",", ":")),
+                        event.created_at.isoformat(),
+                        now_iso(),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.idempotency_key,
-                    event.local_id,
-                    server_id,
-                    event.device_id,
-                    event.session_id,
-                    event.location_id,
-                    event.event_type,
-                    json.dumps(event.payload, separators=(",", ":")),
-                    event.created_at.isoformat(),
-                    now_iso(),
-                ),
-            )
-            results.append({"local_id": event.local_id, "server_id": server_id, "status": "synced"})
+                db.execute("RELEASE SAVEPOINT sync_event")
+                results.append({"local_id": event.local_id, "server_id": server_id, "status": "synced"})
+            except Exception as exc:
+                db.execute("ROLLBACK TO SAVEPOINT sync_event")
+                db.execute("RELEASE SAVEPOINT sync_event")
+                error = str(exc)[:500] or exc.__class__.__name__
+                db.execute(
+                    """
+                    INSERT INTO sync_failures (
+                        local_id, idempotency_key, device_id, session_id, event_type,
+                        error, payload_json, failed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.local_id, event.idempotency_key, event.device_id, event.session_id,
+                        event.event_type, error, json.dumps(event.payload, separators=(",", ":")), now_iso(),
+                    ),
+                )
+                results.append({"local_id": event.local_id, "status": "rejected", "error": error})
         db.commit()
     if task_ids and os.getenv("STOCKTAKE_AUTO_ENRICH", "1") != "0":
         background_tasks.add_task(enrich_tasks_by_id, task_ids)
@@ -432,7 +488,12 @@ def catalog() -> dict:
             product_payload.append(product)
         locations = db.execute("SELECT id, name FROM locations ORDER BY name").fetchall()
         sessions = db.execute(
-            "SELECT id, name, period_date FROM sessions ORDER BY period_date DESC"
+            """
+            SELECT id, name, period_date, status
+            FROM sessions
+            WHERE status IN ('open', 'counting')
+            ORDER BY period_date DESC
+            """
         ).fetchall()
     return {
         "catalog_version": now_iso(),
@@ -551,11 +612,11 @@ def create_session(request: SessionCreateRequest, _: None = Depends(require_admi
     with get_db() as db:
         db.execute(
             """
-            INSERT INTO sessions (id, name, period_date)
-            VALUES (?, ?, ?)
+            INSERT INTO sessions (id, name, period_date, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'open', ?, ?)
             ON CONFLICT(id) DO UPDATE SET name = excluded.name, period_date = excluded.period_date
             """,
-            (session_id, request.name, request.period_date),
+            (session_id, request.name, request.period_date, now_iso(), now_iso()),
         )
         db.commit()
     return {"id": session_id, "name": request.name, "period_date": request.period_date, "status": "saved"}
@@ -568,8 +629,10 @@ def pre_export(session_id: str, _: None = Depends(require_admin)) -> dict:
             """
             SELECT
                 COUNT(*) AS line_count,
-                SUM(CASE WHEN COALESCE(p.bin, sl.bin_snapshot, '') = '' THEN 1 ELSE 0 END) AS missing_bin_count,
-                SUM(CASE WHEN COALESCE(p.draft_status, sl.draft_status, 'confirmed') = 'draft' THEN 1 ELSE 0 END) AS draft_count
+                COUNT(DISTINCT CASE WHEN COALESCE(p.bin, sl.bin_snapshot, '') = ''
+                    THEN COALESCE(sl.product_id, sl.id) END) AS missing_bin_count,
+                COUNT(DISTINCT CASE WHEN COALESCE(p.draft_status, sl.draft_status, 'confirmed') = 'draft'
+                    THEN COALESCE(sl.product_id, sl.id) END) AS draft_count
             FROM stocktake_lines sl
             LEFT JOIN products p ON p.id = sl.product_id
             WHERE sl.session_id = ?
@@ -590,19 +653,21 @@ def missing_bin_rows(session_id: str, _: None = Depends(require_admin)) -> dict:
         rows = db.execute(
             """
             SELECT
-                sl.id AS line_id,
+                MIN(sl.id) AS line_id,
                 sl.product_id,
                 COALESCE(p.barcode, sl.barcode_snapshot, '') AS barcode,
                 COALESCE(p.name, sl.product_name_snapshot, '') AS product_name,
                 COALESCE(l.name, sl.location_id) AS location,
-                sl.quantity_decimal,
-                sl.counted_at
+                CAST(SUM(CAST(sl.quantity_decimal AS REAL)) AS TEXT) AS quantity_decimal,
+                MAX(sl.counted_at) AS counted_at,
+                COUNT(*) AS affected_line_count
             FROM stocktake_lines sl
             LEFT JOIN products p ON p.id = sl.product_id
             LEFT JOIN locations l ON l.id = sl.location_id
             WHERE sl.session_id = ?
               AND COALESCE(p.bin, sl.bin_snapshot, '') = ''
-            ORDER BY sl.counted_at DESC
+            GROUP BY sl.product_id, barcode, product_name, location
+            ORDER BY MAX(sl.counted_at) DESC
             """,
             (session_id,),
         ).fetchall()
@@ -615,8 +680,7 @@ def update_product_bin(product_id: str, request: BinUpdateRequest, _: None = Dep
         result = db.execute(
             """
             UPDATE products
-            SET bin = ?, draft_status = CASE WHEN draft_status = 'draft' THEN 'confirmed' ELSE draft_status END,
-                product_updated_at = ?
+            SET bin = ?, product_updated_at = ?
             WHERE id = ?
             """,
             (request.bin, now_iso(), product_id),
@@ -629,6 +693,9 @@ def update_product_bin(product_id: str, request: BinUpdateRequest, _: None = Dep
 @router.get("/export/{session_id}")
 def export_session(session_id: str, _: None = Depends(require_admin)) -> Response:
     init_db()
+    review = pre_export(session_id)
+    if review["missing_bin_count"] or review["draft_count"]:
+        raise HTTPException(status_code=409, detail="Export blocked until product issues are resolved")
     with get_db() as db:
         count = db.execute(
             "SELECT COUNT(*) AS count FROM stocktake_lines WHERE session_id = ?",
@@ -637,6 +704,20 @@ def export_session(session_id: str, _: None = Depends(require_admin)) -> Respons
         if count == 0:
             raise HTTPException(status_code=404, detail="No stocktake lines for session")
         workbook = build_stocktake_workbook(db, session_id)
+        current = now_iso()
+        old_status = db.execute("SELECT status FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        db.execute(
+            "UPDATE sessions SET status = 'exported', exported_at = ?, updated_at = ? WHERE id = ?",
+            (current, current, session_id),
+        )
+        db.execute(
+            """
+            INSERT INTO session_audit (session_id, old_status, new_status, reason, changed_by, changed_at)
+            VALUES (?, ?, 'exported', 'Final Excel export', 'admin', ?)
+            """,
+            (session_id, old_status["status"] if old_status else None, current),
+        )
+        db.commit()
     return Response(
         workbook,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

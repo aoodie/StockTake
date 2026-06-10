@@ -11,7 +11,7 @@ from ..models import (
     LoginRequest, ProductPatchRequest, ProductUpsertRequest,
     TaskPatchRequest, TaskApproveRequest, BulkProductUpdateRequest,
     BulkProductDeleteRequest, ProductBarcodeRequest, ProductMergeRequest,
-    ProcureWizardImportRequest, ProcureWizardLinkRequest
+    ProcureWizardImportRequest, ProcureWizardLinkRequest, SessionStatusRequest
 )
 from ..auth import (
     admin_password, create_admin_session, revoke_admin_session,
@@ -1163,10 +1163,12 @@ def admin_sessions(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> 
     with get_db() as db:
         rows = db.execute(
             """
-            SELECT s.id, s.name, s.period_date, COUNT(sl.id) AS line_count
+            SELECT s.id, s.name, s.period_date, s.status, s.updated_at, s.exported_at,
+                   COUNT(sl.id) AS line_count, COUNT(DISTINCT sl.device_id) AS device_count,
+                   MAX(sl.counted_at) AS last_counted_at
             FROM sessions s
             LEFT JOIN stocktake_lines sl ON sl.session_id = s.id
-            GROUP BY s.id, s.name, s.period_date
+            GROUP BY s.id, s.name, s.period_date, s.status, s.updated_at, s.exported_at
             ORDER BY s.period_date DESC
             """
         ).fetchall()
@@ -1180,10 +1182,46 @@ def admin_delete_session(
     require_admin(_)
     init_db()
     with get_db() as db:
-        db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        db.execute("DELETE FROM stocktake_lines WHERE session_id = ?", (session_id,))
+        session = db.execute("SELECT status FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        current = now_iso()
+        db.execute("UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ?", (current, session_id))
+        db.execute(
+            """
+            INSERT INTO session_audit (session_id, old_status, new_status, reason, changed_by, changed_at)
+            VALUES (?, ?, 'archived', 'Archived from admin', 'admin', ?)
+            """,
+            (session_id, session["status"], current),
+        )
         db.commit()
-    return {"status": "deleted"}
+    return {"status": "archived"}
+
+@router.patch("/admin/api/sessions/{session_id}/status")
+def admin_update_session_status(
+    session_id: str,
+    request: SessionStatusRequest,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        session = db.execute("SELECT status FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session["status"] == "archived" and request.status != "archived" and not request.reason:
+            raise HTTPException(status_code=422, detail="Reason required to reopen archived session")
+        current = now_iso()
+        db.execute("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?", (request.status, current, session_id))
+        db.execute(
+            """
+            INSERT INTO session_audit (session_id, old_status, new_status, reason, changed_by, changed_at)
+            VALUES (?, ?, ?, ?, 'admin', ?)
+            """,
+            (session_id, session["status"], request.status, request.reason, current),
+        )
+        db.commit()
+    return {"session_id": session_id, "status": request.status}
 
 @router.get("/admin/api/export/{session_id}/review")
 def admin_export_review(session_id: str, _: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:

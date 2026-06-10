@@ -91,7 +91,11 @@ def init_db(force: bool = False) -> None:
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                period_date TEXT NOT NULL
+                period_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT,
+                updated_at TEXT,
+                exported_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS stocktake_lines (
@@ -116,6 +120,28 @@ def init_db(force: bool = False) -> None:
                 new_quantity TEXT NOT NULL,
                 changed_at TEXT NOT NULL,
                 change_reason TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                error TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                failed_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS session_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                old_status TEXT,
+                new_status TEXT NOT NULL,
+                reason TEXT,
+                changed_by TEXT NOT NULL,
+                changed_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -228,6 +254,10 @@ def init_db(force: bool = False) -> None:
         add_column_if_missing(db, "products", "photo_source_name", "TEXT")
         add_column_if_missing(db, "products", "photo_saved_path", "TEXT")
         add_column_if_missing(db, "products", "photo_approved_at", "TEXT")
+        add_column_if_missing(db, "sessions", "status", "TEXT NOT NULL DEFAULT 'open'")
+        add_column_if_missing(db, "sessions", "created_at", "TEXT")
+        add_column_if_missing(db, "sessions", "updated_at", "TEXT")
+        add_column_if_missing(db, "sessions", "exported_at", "TEXT")
         db.execute(
             """
             INSERT OR IGNORE INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
@@ -280,6 +310,10 @@ def init_db(force: bool = False) -> None:
             ON ai_suggestions(status, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_suggestions_target
             ON ai_suggestions(target_type, target_id, status);
+            CREATE INDEX IF NOT EXISTS idx_synced_events_device_created
+            ON synced_events(device_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_sync_failures_failed
+            ON sync_failures(failed_at DESC);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_rows_import_pid
             ON procurewizard_rows(import_id, pid);
             CREATE INDEX IF NOT EXISTS idx_procurewizard_rows_product
@@ -300,8 +334,13 @@ def product_select_sql() -> str:
     """
 
 def get_setting(key: str, default: str = "") -> str:
-    with get_db() as db:
-        row = db.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    try:
+        with get_db() as db:
+            row = db.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    except sqlite3.OperationalError:
+        init_db(force=True)
+        with get_db() as db:
+            row = db.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default
 
 def set_setting(key: str, value: str) -> None:
@@ -327,7 +366,10 @@ def ensure_default_rows() -> None:
         db.execute("INSERT OR IGNORE INTO locations (id, name) VALUES ('main-bar', 'Main Bar')")
         db.execute("INSERT OR IGNORE INTO locations (id, name) VALUES ('cellar', 'Cellar')")
         db.execute(
-            "INSERT OR IGNORE INTO sessions (id, name, period_date) VALUES (?, ?, ?)",
-            (f"session-{today}", today, today),
+            """
+            INSERT OR IGNORE INTO sessions (id, name, period_date, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'open', ?, ?)
+            """,
+            (f"session-{today}", today, today, now_iso(), now_iso()),
         )
         db.commit()

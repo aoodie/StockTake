@@ -3,11 +3,21 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app import database
 
+def open_session(session_id: str = "session-a") -> None:
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO sessions (id, name, period_date, status) VALUES (?, ?, '2026-06-10', 'open')",
+            (session_id, session_id),
+        )
+        db.commit()
+
 def test_sync_idempotency_ignores_duplicate_events(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
     client = TestClient(app)
+    open_session()
 
     event = {
         "local_id": "local-1",
@@ -48,6 +58,7 @@ def test_quantity_edit_and_delete_events_update_line(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
     client = TestClient(app)
+    open_session()
 
     base = {
         "device_id": "device-a",
@@ -117,6 +128,7 @@ def test_scan_sync_does_not_mutate_existing_product_barcode(tmp_path, monkeypatc
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
     client = TestClient(app)
+    open_session()
 
     base = {
         "device_id": "device-a",
@@ -185,6 +197,7 @@ def test_sync_token_is_required_when_configured(tmp_path, monkeypatch):
     monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
     monkeypatch.setenv("STOCKTAKE_SYNC_TOKEN", "trial-token")
     client = TestClient(app)
+    open_session()
 
     event = {
         "local_id": "local-token",
@@ -222,6 +235,7 @@ def test_sync_rejects_invalid_quantities(tmp_path, monkeypatch):
     monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
     monkeypatch.delenv("STOCKTAKE_SYNC_TOKEN", raising=False)
     client = TestClient(app)
+    open_session()
 
     event = {
         "local_id": "local-negative",
@@ -245,8 +259,9 @@ def test_sync_rejects_invalid_quantities(tmp_path, monkeypatch):
     }
 
     response = client.post("/sync/events", json={"events": [event]})
-    assert response.status_code == 400
-    assert "Quantity cannot be negative" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["events"][0]["status"] == "rejected"
+    assert "Quantity cannot be negative" in response.json()["events"][0]["error"]
 
 
 def test_scanner_lookup_returns_enrichment_for_unknown_barcode(tmp_path, monkeypatch):
@@ -377,3 +392,66 @@ def test_raw_scanned_export_includes_unmapped_draft_without_admin(tmp_path, monk
     assert response.status_code == 200
     assert response.headers["content-disposition"] == 'attachment; filename="scanned-lines-raw-session.xlsx"'
     assert len(response.content) > 1000
+
+
+def test_sync_rejects_closed_session_without_blocking_valid_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("STOCKTAKE_AUTO_ENRICH", "0")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute("INSERT INTO sessions (id, name, period_date, status) VALUES ('closed', 'Closed', '2026-06-09', 'archived')")
+        db.execute("INSERT INTO sessions (id, name, period_date, status) VALUES ('open', 'Open', '2026-06-10', 'open')")
+        db.commit()
+    client = TestClient(app)
+
+    def scan(local_id, session_id, line_id):
+        return {
+            "local_id": local_id,
+            "device_id": "device-a",
+            "session_id": session_id,
+            "location_id": "main",
+            "event_type": "scan",
+            "payload": {
+                "line_id": line_id,
+                "barcode": local_id,
+                "quantity_decimal": "1",
+                "product": {"id": f"p-{local_id}", "barcode": local_id, "name": local_id, "draft_status": "confirmed"},
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "idempotency_key": f"device-a:{local_id}",
+        }
+
+    response = client.post("/sync/events", json={"events": [scan("bad", "closed", "bad-line"), scan("good", "open", "good-line")]})
+    assert {row["local_id"]: row["status"] for row in response.json()["events"]} == {"bad": "rejected", "good": "synced"}
+
+
+def test_sync_prevents_cross_device_line_edit(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute("INSERT INTO sessions (id, name, period_date, status) VALUES ('s1', 'S1', '2026-06-10', 'open')")
+        db.execute(
+            """
+            INSERT INTO stocktake_lines
+                (id, session_id, location_id, quantity_decimal, draft_status, counted_at, device_id)
+            VALUES ('line-a', 's1', 'main', '1', 'confirmed', ?, 'device-a')
+            """,
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        db.commit()
+    client = TestClient(app)
+    event = {
+        "local_id": "edit-other",
+        "device_id": "device-b",
+        "session_id": "s1",
+        "location_id": "main",
+        "event_type": "quantity_edit",
+        "payload": {"line_id": "line-a", "new_quantity": "99"},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "idempotency_key": "device-b:edit-other",
+    }
+    assert client.post("/sync/events", json={"events": [event]}).json()["events"][0]["status"] == "rejected"
+    with database.get_db() as db:
+        assert db.execute("SELECT quantity_decimal FROM stocktake_lines WHERE id = 'line-a'").fetchone()["quantity_decimal"] == "1"

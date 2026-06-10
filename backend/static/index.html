@@ -84,8 +84,8 @@
         <h2>Start Stocktake</h2>
         <label for="sessionPreset">Saved session</label>
         <select id="sessionPreset"></select>
-        <label for="sessionCodeInput">Session code</label>
-        <input id="sessionCodeInput" autocomplete="off" placeholder="session-2026-05-28">
+        <label for="sessionCodeInput">Active session code</label>
+        <input id="sessionCodeInput" autocomplete="off" readonly>
         <label for="sessionLocationSelect">Location</label>
         <select id="sessionLocationSelect"></select>
         <button id="startSessionButton" type="button">Start Scanning</button>
@@ -174,12 +174,13 @@
         </header>
         <div id="exportSummary" class="export-summary"></div>
         <div id="missingBinList" class="missing-bin-list"></div>
+        <button id="downloadRecoveryButton" type="button">Download Local Recovery CSV</button>
         <a id="downloadRawExportLink" class="download-button raw-export hidden" href="#">Download All Scanned Lines</a>
         <a id="downloadExportLink" class="download-button hidden" href="#">Download Final Excel</a>
       </form>
     </dialog>
 
     <script src="/vendor/zxing-library.min.js?v=typed-pw-suggest-1"></script>
-    <script src="/app.js?v=qty-keypad-1" type="module"></script>
+    <script src="/app.js?v=reliability-1" type="module"></script>
   </body>
 </html>

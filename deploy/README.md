@@ -58,3 +58,10 @@ Then open:
 ```text
 https://stock.aoodie.xyz
 ```
+
+Verify the deployment and create an online backup:
+
+```bash
+curl --fail https://stock.aoodie.xyz/health
+sudo bash /opt/stocktake/deploy/backup_vps.sh
+```

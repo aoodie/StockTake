@@ -1,10 +1,10 @@
-const CACHE_NAME = "stocktake-v25";
+const CACHE_NAME = "stocktake-v26";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/mapping.html",
   "/styles.css?v=qty-keypad-1",
-  "/app.js?v=qty-keypad-1",
+  "/app.js?v=reliability-1",
   "/mapping.js?v=phone-mapping-4",
   "/frontend-utils.js?v=qty-keypad-1",
   "/frontend-utils.js?v=phone-mapping-4",
