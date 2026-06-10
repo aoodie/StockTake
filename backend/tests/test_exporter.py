@@ -31,6 +31,7 @@ def test_export_preserves_zero_and_missing_bin_exception():
             bin_snapshot TEXT,
             product_name_snapshot TEXT,
             quantity_decimal TEXT,
+            case_type TEXT,
             draft_status TEXT,
             counted_at TEXT,
             device_id TEXT,
@@ -46,7 +47,7 @@ def test_export_preserves_zero_and_missing_bin_exception():
     db.execute(
         """
         INSERT INTO stocktake_lines VALUES (
-            'line1', 's1', 'l1', 'p1', '123', '', 'Gin', '0', 'confirmed',
+            'line1', 's1', 'l1', 'p1', '123', '', 'Gin', '0', 'split', 'confirmed',
             '2026-05-27T10:00:00Z', 'device-a', ''
         )
         """
@@ -73,7 +74,7 @@ def test_raw_export_prefers_barcode_and_name_captured_at_scan_time():
         CREATE TABLE stocktake_lines (
             id TEXT PRIMARY KEY, session_id TEXT, location_id TEXT, product_id TEXT,
             barcode_snapshot TEXT, bin_snapshot TEXT, product_name_snapshot TEXT,
-            quantity_decimal TEXT, draft_status TEXT, counted_at TEXT, device_id TEXT, notes TEXT
+            quantity_decimal TEXT, case_type TEXT, draft_status TEXT, counted_at TEXT, device_id TEXT, notes TEXT
         );
         """
     )
@@ -81,7 +82,7 @@ def test_raw_export_prefers_barcode_and_name_captured_at_scan_time():
     db.execute(
         """
         INSERT INTO stocktake_lines VALUES (
-            'line1', 's1', 'l1', 'pw-1', 'PHYSICAL-BARCODE', '', 'Name Seen During Scan', '2', 'draft',
+            'line1', 's1', 'l1', 'pw-1', 'PHYSICAL-BARCODE', '', 'Name Seen During Scan', '2', 'full', 'draft',
             '2026-06-07T10:00:00Z', 'phone-a', ''
         )
         """
@@ -94,3 +95,4 @@ def test_raw_export_prefers_barcode_and_name_captured_at_scan_time():
     assert row[4].value == "PHYSICAL-BARCODE"
     assert row[5].value == "Name Seen During Scan"
     assert row[10].value == "draft"
+    assert row[15].value == "full"

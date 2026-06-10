@@ -75,6 +75,7 @@ def test_quantity_edit_and_delete_events_update_line(tmp_path, monkeypatch):
             "line_id": "line-a",
             "barcode": "5000213014231",
             "quantity_decimal": "1",
+            "case_type": "full",
             "product": {
                 "id": "product-a",
                 "barcode": "5000213014231",
@@ -111,9 +112,10 @@ def test_quantity_edit_and_delete_events_update_line(tmp_path, monkeypatch):
     assert response.status_code == 200
 
     with database.get_db() as db:
-        row = db.execute("SELECT quantity_decimal FROM stocktake_lines WHERE id = 'line-a'").fetchone()
+        row = db.execute("SELECT quantity_decimal, case_type FROM stocktake_lines WHERE id = 'line-a'").fetchone()
         audit = db.execute("SELECT new_quantity FROM quantity_audit WHERE line_id = 'line-a'").fetchone()
     assert row["quantity_decimal"] == "0"
+    assert row["case_type"] == "full"
     assert audit["new_quantity"] == "0"
 
     response = client.post("/sync/events", json={"events": [delete]})

@@ -524,11 +524,11 @@ def format_decimal(value: Decimal) -> str:
     return format(normalized, "f")
 
 
-def counted_quantities_by_product(db: Connection, session_id: str) -> dict[str, Decimal]:
-    totals: dict[str, Decimal] = {}
+def counted_quantities_by_product(db: Connection, session_id: str) -> dict[str, dict[str, Decimal]]:
+    totals: dict[str, dict[str, Decimal]] = {}
     rows = db.execute(
         """
-        SELECT product_id, quantity_decimal
+        SELECT product_id, quantity_decimal, COALESCE(case_type, 'split') AS case_type
         FROM stocktake_lines
         WHERE session_id = ? AND COALESCE(product_id, '') != ''
         """,
@@ -539,7 +539,9 @@ def counted_quantities_by_product(db: Connection, session_id: str) -> dict[str, 
             quantity = Decimal(str(row["quantity_decimal"] or "0"))
         except Exception:
             quantity = Decimal("0")
-        totals[row["product_id"]] = totals.get(row["product_id"], Decimal("0")) + quantity
+        product_totals = totals.setdefault(row["product_id"], {"full": Decimal("0"), "split": Decimal("0")})
+        case_type = row["case_type"] if row["case_type"] in {"full", "split"} else "split"
+        product_totals[case_type] += quantity
     return totals
 
 
@@ -577,8 +579,10 @@ def build_procurewizard_csv(db: Connection, session_id: str) -> tuple[str, bytes
     ).fetchall():
         raw = json.loads(row["raw_json"])
         if row["product_id"] in totals:
-            raw[8] = ""
-            raw[9] = format_decimal(totals[row["product_id"]])
+            full = totals[row["product_id"]]["full"]
+            split = totals[row["product_id"]]["split"]
+            raw[8] = format_decimal(full) if full else ""
+            raw[9] = format_decimal(split) if split else ""
         output_rows.append(raw)
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)

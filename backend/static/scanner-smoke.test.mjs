@@ -71,3 +71,11 @@ test("full-screen confirmation has a thumb quantity keypad", () => {
   assert.match(appSource, /data-replace-on-entry="true"/);
   assert.match(appSource, /data-action="quantity-backspace"/);
 });
+
+test("full-screen confirmation separates full and split case counts", () => {
+  assert.match(appSource, /data-action="set-case-type"/);
+  assert.match(appSource, /data-case-type="full"/);
+  assert.match(appSource, /data-case-type="split"/);
+  assert.match(appSource, /case_type: state\.caseType/);
+  assert.match(appSource, /findExistingLineForProduct\(product, state\.caseType\)/);
+});

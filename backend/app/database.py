@@ -107,6 +107,7 @@ def init_db(force: bool = False) -> None:
                 bin_snapshot TEXT,
                 product_name_snapshot TEXT,
                 quantity_decimal TEXT NOT NULL,
+                case_type TEXT NOT NULL DEFAULT 'split',
                 draft_status TEXT NOT NULL DEFAULT 'confirmed',
                 counted_at TEXT NOT NULL,
                 device_id TEXT NOT NULL,
@@ -258,6 +259,7 @@ def init_db(force: bool = False) -> None:
         add_column_if_missing(db, "sessions", "created_at", "TEXT")
         add_column_if_missing(db, "sessions", "updated_at", "TEXT")
         add_column_if_missing(db, "sessions", "exported_at", "TEXT")
+        add_column_if_missing(db, "stocktake_lines", "case_type", "TEXT NOT NULL DEFAULT 'split'")
         db.execute(
             """
             INSERT OR IGNORE INTO product_barcodes (barcode, product_id, label, is_primary, created_at)

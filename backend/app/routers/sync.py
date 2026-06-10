@@ -53,6 +53,12 @@ def normalize_event_quantity(value: object) -> str:
     formatted = format(quantity.normalize(), "f")
     return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
 
+def normalize_case_type(value: object) -> str:
+    case_type = normalize_identifier(value or "split").lower()
+    if case_type not in {"full", "split"}:
+        raise HTTPException(status_code=400, detail="Case type must be full or split")
+    return case_type
+
 def suggestion_has_real_name(suggestion: dict, barcode: str) -> bool:
     name = normalize_identifier(suggestion.get("name"))
     return bool(name and name.lower() not in {f"product {barcode}".lower(), f"draft {barcode}".lower()})
@@ -263,9 +269,9 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
             """
             INSERT OR REPLACE INTO stocktake_lines (
                 id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
-                product_name_snapshot, quantity_decimal, draft_status, counted_at, device_id, notes
+                product_name_snapshot, quantity_decimal, case_type, draft_status, counted_at, device_id, notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 line_id,
@@ -276,6 +282,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
                 product.get("bin"),
                 product.get("name"),
                 normalize_event_quantity(payload.get("quantity_decimal", "1")),
+                normalize_case_type(payload.get("case_type")),
                 product.get("draft_status", "confirmed"),
                 created,
                 event.device_id,

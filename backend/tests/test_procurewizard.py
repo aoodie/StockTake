@@ -102,6 +102,34 @@ def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tm
     assert "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6],0,0,," in exported
 
 
+def test_procurewizard_export_separates_full_and_split_case_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with database.get_db() as db:
+        import_procurewizard_csv(db, "pw.csv", sample_csv())
+        db.executemany(
+            """
+            INSERT INTO stocktake_lines (
+                id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                product_name_snapshot, quantity_decimal, case_type, draft_status, counted_at, device_id, notes
+            ) VALUES (?, 'session-mixed', 'cellar', 'procurewizard-675430', '675430', '675430',
+                      'Mirabeau Pure Rosé', ?, ?, 'confirmed', ?, 'device-a', '')
+            """,
+            [
+                ("line-full", "3", "full", now),
+                ("line-split", "5", "split", now),
+            ],
+        )
+        db.commit()
+        _, payload = build_procurewizard_csv(db, "session-mixed")
+
+    exported = payload.decode("cp1252")
+    assert "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6],0,0,3,5" in exported
+
+
 def test_manual_procurewizard_link_persists_as_pid_alias_across_reimport(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")

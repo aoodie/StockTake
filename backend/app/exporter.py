@@ -23,6 +23,7 @@ EXPORT_COLUMNS = [
     "Counted At",
     "Device ID",
     "Notes",
+    "Case Type",
 ]
 
 def spreadsheet_safe(value):
@@ -64,7 +65,8 @@ def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_sna
             CASE WHEN {bin_value} = '' THEN 'Y' ELSE 'N' END AS missing_bin,
             sl.counted_at,
             sl.device_id,
-            COALESCE(sl.notes, '') AS notes
+            COALESCE(sl.notes, '') AS notes,
+            COALESCE(sl.case_type, 'split') AS case_type
         FROM stocktake_lines sl
         LEFT JOIN products p ON p.id = sl.product_id
         LEFT JOIN sessions s ON s.id = sl.session_id

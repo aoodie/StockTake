@@ -178,6 +178,7 @@ let state = {
   locationId: "main-bar",
   locationName: "Main Bar",
   quantity: "",
+  caseType: "split",
   currentProduct: null,
   pendingBarcode: "",
   lastBarcode: null,
@@ -332,6 +333,7 @@ async function restoreState() {
       zxingLoadPromise: null,
       cameraStartPromise: null,
       quantity: "",
+      caseType: "split",
       currentProduct: null,
       pendingBarcode: "",
       lastBarcode: null,
@@ -576,6 +578,18 @@ function productSubtitle(product) {
   return parts.join(" | ");
 }
 
+function defaultCaseType(product) {
+  return product?.procurewizard || String(product?.unit || "").toLowerCase() === "case" ? "full" : "split";
+}
+
+function renderCaseTypeControl() {
+  for (const button of els.scanHud.querySelectorAll('[data-action="set-case-type"]')) {
+    const active = button.dataset.caseType === state.caseType;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+}
+
 function showScanHud(product, quantity, total, variant = "success") {
   const isDraft = product?.draft_status === "draft";
   const photo = product?.photo_url
@@ -598,6 +612,14 @@ function showScanHud(product, quantity, total, variant = "success") {
       </div>
       ${product ? `
         <div class="hud-lookup" data-role="lookup-status">${isDraft ? "Looking up product details and photo..." : "Product matched"}</div>
+        <div class="hud-case-type" role="group" aria-label="Count type">
+          <button data-action="set-case-type" data-case-type="full" aria-pressed="${state.caseType === "full"}" class="${state.caseType === "full" ? "active" : ""}" type="button">
+            <strong>Full case</strong><small>Unopened complete case</small>
+          </button>
+          <button data-action="set-case-type" data-case-type="split" aria-pressed="${state.caseType === "split"}" class="${state.caseType === "split" ? "active" : ""}" type="button">
+            <strong>Split case</strong><small>Loose bottles or units</small>
+          </button>
+        </div>
         <label class="hud-quantity-label" for="hudQuantityInput">Quantity <span>Tap number or type</span></label>
         <input id="hudQuantityInput" class="hud-quantity-input" inputmode="decimal" enterkeyhint="done" autocomplete="off" aria-label="Quantity" value="${escapeHtml(quantity || "1")}" data-replace-on-entry="true">
         <div class="hud-quick" role="group" aria-label="Quick quantity">
@@ -680,6 +702,7 @@ async function chooseProcureWizardMatch(index) {
     }
   });
   state.currentProduct = product;
+  state.caseType = defaultCaseType(product);
   state.pendingUnknownProduct = null;
   await cacheProduct(product);
   renderProduct(product);
@@ -697,6 +720,7 @@ async function chooseProcureWizardMatch(index) {
   }
   if (current) current.textContent = `Current total: ${await currentProductCount(product)}`;
   if (lookup) lookup.textContent = `ProcureWizard product selected · PID ${match.pid}. Save & Next will map this barcode and count it against the PW row.`;
+  renderCaseTypeControl();
 }
 
 function matchingCatalogProducts(query) {
@@ -757,6 +781,7 @@ async function chooseExistingProductForUnknown(index) {
   });
   await cacheProduct(product);
   state.currentProduct = product;
+  state.caseType = defaultCaseType(product);
   state.pendingUnknownProduct = null;
   renderProduct(product);
   const name = els.scanHud.querySelector('[data-role="hud-name"]');
@@ -765,6 +790,7 @@ async function chooseExistingProductForUnknown(index) {
   if (name) name.textContent = product.name;
   if (meta) meta.textContent = productSubtitle(product);
   if (lookup) lookup.textContent = "Existing product selected. Save & Next will remember this barcode.";
+  renderCaseTypeControl();
   els.unknownDialog.close();
   pulse("Product selected");
 }
@@ -827,7 +853,7 @@ async function enrichUnknownProduct(product) {
 
 async function commitScanQuantity(product, quantity, { mergeDuplicate = false, reason = "Scan saved" } = {}) {
   if (mergeDuplicate) {
-    const existingLine = await findExistingLineForProduct(product);
+    const existingLine = await findExistingLineForProduct(product, state.caseType);
     if (existingLine) {
       const newQuantity = addDecimalStrings(existingLine.quantity_decimal, quantity);
       await editLine(existingLine, newQuantity, reason);
@@ -885,6 +911,7 @@ async function handleScan(barcode, options = {}) {
     const product = await getProduct(barcode);
     state.currentProduct = product;
     state.quantity = "1";
+    state.caseType = defaultCaseType(product);
     renderProduct(product);
     renderQuantity();
     const total = await currentCount(product.barcode);
@@ -926,6 +953,7 @@ async function addLine(product, quantity) {
     category: product.category,
     size: product.size,
     quantity_decimal: normalizeQuantity(quantity),
+    case_type: state.caseType,
     unit: product.unit,
     photo_url: product.photo_url || "",
     draft_status: product.draft_status,
@@ -940,6 +968,7 @@ async function addLine(product, quantity) {
     line_id: line.id,
     barcode: line.barcode,
     quantity_decimal: line.quantity_decimal,
+    case_type: line.case_type,
     notes: line.notes,
     product: {
       id: product.id,
@@ -1113,7 +1142,7 @@ async function confirmQuantity() {
   const saveButton = els.scanHud.querySelector('[data-action="save-next"]');
   if (saveButton) saveButton.disabled = true;
   const product = state.currentProduct;
-  const existingLine = await findExistingLineForProduct(product);
+  const existingLine = await findExistingLineForProduct(product, state.caseType);
   if (existingLine) {
     const duplicateAction = await showDuplicateDialog(existingLine, quantity);
     if (duplicateAction === "cancel") {
@@ -1142,6 +1171,7 @@ async function confirmQuantity() {
 
 function resetActiveScan(options = {}) {
   state.quantity = "";
+  state.caseType = "split";
   state.pendingBarcode = "";
   state.scanInFlight = false;
   if (!options.keepProduct) state.currentProduct = null;
@@ -1199,10 +1229,13 @@ async function deleteLine(line) {
   syncEvents();
 }
 
-async function findExistingLineForProduct(product) {
+async function findExistingLineForProduct(product, caseType = state.caseType) {
   const rows = await scopedLines();
   const lookupKeys = new Set(barcodeLookupKeys(product.barcode));
-  return rows.find((line) => line.product_id === product.id || barcodeLookupKeys(line.barcode).some((key) => lookupKeys.has(key)));
+  return rows.find((line) => {
+    const sameProduct = line.product_id === product.id || barcodeLookupKeys(line.barcode).some((key) => lookupKeys.has(key));
+    return sameProduct && (line.case_type || "split") === caseType;
+  });
 }
 
 async function renderLines() {
@@ -1227,7 +1260,7 @@ async function renderLines() {
       <span class="line-thumb">${line.photo_url ? `<img alt="" src="${escapeHtml(line.photo_url)}">` : "Photo"}</span>
       <span class="line-main">
         <strong>${escapeHtml(line.product_name)}</strong>
-        <small>${escapeHtml(line.barcode)} | BIN: ${escapeHtml(line.bin || "Missing")} | ${escapeHtml(line.sync_status)}</small>
+        <small>${escapeHtml(line.barcode)} | BIN: ${escapeHtml(line.bin || "Missing")} | ${escapeHtml(line.case_type === "full" ? "Full case" : "Split case")} | ${escapeHtml(line.sync_status)}</small>
         <small>${new Date(line.counted_at).toLocaleTimeString()}</small>
         <span class="line-badges">${badges}</span>
       </span>
@@ -2011,12 +2044,12 @@ function csvCell(value) {
 async function downloadLocalRecovery() {
   const lines = (await all("lines")).filter((line) => line.session_id === state.sessionId);
   const events = (await all("events")).filter((event) => event.session_id === state.sessionId && event.sync_status !== "synced");
-  const rows = [["record_type", "session_id", "location_id", "id", "barcode", "product_name", "quantity", "sync_status", "created_at", "error"].map(csvCell).join(",")];
+  const rows = [["record_type", "session_id", "location_id", "id", "barcode", "product_name", "quantity", "case_type", "sync_status", "created_at", "error"].map(csvCell).join(",")];
   for (const line of lines) {
-    rows.push(["line", line.session_id, line.location_id, line.id, line.barcode, line.product_name, line.quantity_decimal, line.sync_status, line.counted_at, ""].map(csvCell).join(","));
+    rows.push(["line", line.session_id, line.location_id, line.id, line.barcode, line.product_name, line.quantity_decimal, line.case_type || "split", line.sync_status, line.counted_at, ""].map(csvCell).join(","));
   }
   for (const event of events) {
-    rows.push(["event", event.session_id, event.location_id, event.local_id, event.payload?.barcode || "", event.payload?.product_name || "", event.payload?.quantity_decimal || "", event.sync_status, event.created_at, event.sync_error || ""].map(csvCell).join(","));
+    rows.push(["event", event.session_id, event.location_id, event.local_id, event.payload?.barcode || "", event.payload?.product_name || "", event.payload?.quantity_decimal || "", event.payload?.case_type || "split", event.sync_status, event.created_at, event.sync_error || ""].map(csvCell).join(","));
   }
   const url = URL.createObjectURL(new Blob([`\ufeff${rows.join("\r\n")}`], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
@@ -2068,6 +2101,11 @@ function bindEvents() {
     if (button?.dataset.action === "next-scan") closeScanHud();
     if (button?.dataset.action === "skip-scan") closeScanHud({ reset: true });
     if (button?.dataset.action === "save-next") confirmQuantity();
+    if (button?.dataset.action === "set-case-type") {
+      state.caseType = button.dataset.caseType === "full" ? "full" : "split";
+      renderCaseTypeControl();
+      vibrate(20);
+    }
     if (button?.dataset.action === "set-quantity") {
       state.quantity = button.dataset.value || "1";
       const input = els.scanHud.querySelector("#hudQuantityInput");
