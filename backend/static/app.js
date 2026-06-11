@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=multi-barcode-confirm-1";
+} from "./frontend-utils.js?v=scanner-recovery-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -1673,7 +1673,7 @@ function loadZxingScript() {
 
 function zxingMethodSummary(reader) {
   return [
-    typeof reader.decode === "function" ? "direct-video" : "",
+    typeof reader.decode === "function" ? "low-level-decode" : "",
     typeof reader.decodeFromVideoElementContinuously === "function" ? "library-continuous" : ""
   ].filter(Boolean).join(", ") || "none";
 }
@@ -1696,12 +1696,12 @@ async function startZxingScanLoop(generation = state.decoderGeneration) {
   if (generation !== state.decoderGeneration || !state.scanLoopActive) return false;
   if (zxing?.BrowserMultiFormatReader) {
     state.zxingReader = makeZxingReader(zxing);
-    if (typeof state.zxingReader.decode !== "function") {
-      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing direct video decoder unavailable" });
+    if (typeof state.zxingReader.decodeFromVideoElementContinuously !== "function") {
+      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing video decoder unavailable" });
       state.zxingReader = null;
       return false;
     }
-    void runZxingVideoLoop(state.zxingReader, generation);
+    runZxingVideoLoop(state.zxingReader, generation);
     return true;
   }
   return false;
@@ -1743,41 +1743,35 @@ function isExpectedZxingMiss(error) {
   ].some((ErrorType) => ErrorType && error instanceof ErrorType);
 }
 
-async function runZxingVideoLoop(reader, generation) {
-  updateDiagnostics({ roi_size: "full video", decoder_heartbeat: "starting controlled loop" });
-  while (decoderIsCurrent(generation, reader)) {
+function runZxingVideoLoop(reader, generation) {
+  updateDiagnostics({ roi_size: "full video", decoder_heartbeat: "starting library video loop" });
+  reader.decodeFromVideoElementContinuously(els.preview, (result, error) => {
+    if (!decoderIsCurrent(generation, reader)) return;
     if (shouldSkipDecode()) {
       state.framesSkipped += 1;
       updateDiagnostics({ frames_skipped: String(state.framesSkipped) });
-    } else {
-      const startedAt = performance.now();
-      try {
-        const result = reader.decode(els.preview);
-        recordDecodeDuration(startedAt);
-        updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString(), decoder_blocked: "-" });
-        const barcode = decodedBarcodeText(result);
-        if (barcode) {
-          updateDiagnostics({ last_raw_barcode: barcode });
-          const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
-          state.barcodeCandidate = decision.candidate;
-          if (decision.confirmed) {
-            state.barcodeCandidate = null;
-            await handleScan(barcode);
-          }
-        }
-      } catch (error) {
-        updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
-        if (!isExpectedZxingMiss(error)) {
-          state.decodeErrors += 1;
-          updateDiagnostics({
-            decode_errors: String(state.decodeErrors),
-            last_error: `decode frame: ${error?.name || error?.message || "failed"}`
-          });
-        }
-      }
+      return;
     }
-    await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
-  }
+    updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString(), decoder_blocked: "-" });
+    const barcode = decodedBarcodeText(result);
+    if (barcode) {
+      updateDiagnostics({ last_raw_barcode: barcode });
+      const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+      state.barcodeCandidate = decision.candidate;
+      if (decision.confirmed) {
+        state.barcodeCandidate = null;
+        void handleScan(barcode);
+      }
+      return;
+    }
+    if (error && !isExpectedZxingMiss(error)) {
+      state.decodeErrors += 1;
+      updateDiagnostics({
+        decode_errors: String(state.decodeErrors),
+        last_error: `decode frame: ${error?.name || error?.message || "failed"}`
+      });
+    }
+  });
 }
 
 async function startNativeScanLoop(generation = state.decoderGeneration) {
@@ -2362,11 +2356,6 @@ async function init() {
   await renderLines();
   await syncEvents();
   resetInactivityTimer();
-  if (state.restoredSession && diagnostics.camera_permission !== "granted") {
-    els.wakeButton.classList.remove("hidden");
-    setSyncStatus("Tap to start scanner");
-    return;
-  }
   ensureCameraStarted().catch(reportCameraError);
 }
 

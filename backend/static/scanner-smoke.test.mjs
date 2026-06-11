@@ -1,20 +1,30 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 const appSource = await readFile(new URL("./app.js", import.meta.url), "utf8");
+const require = createRequire(import.meta.url);
+const ZXing = require("./vendor/zxing-library.min.js");
 
-test("main scanner uses an app-controlled direct video decode loop", () => {
-  assert.match(appSource, /reader\.decode\(els\.preview\)/);
+test("main scanner uses ZXing's supported video-element decode loop", () => {
   assert.match(appSource, /runZxingVideoLoop/);
+  assert.match(appSource, /reader\.decodeFromVideoElementContinuously\(els\.preview/);
   assert.doesNotMatch(appSource, /decodeFromConstraints/);
-  assert.doesNotMatch(appSource, /decodeFromVideoElementContinuously\(els\.preview/);
+  assert.doesNotMatch(appSource, /reader\.decode\(els\.preview\)/);
   assert.doesNotMatch(appSource, /decodeFromImageElement/);
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for multi-barcode confirmation", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=multi-barcode-confirm-1/);
+test("bundled ZXing exposes the video-element decoder used by the scanner", () => {
+  const reader = new ZXing.BrowserMultiFormatReader();
+  assert.equal(typeof reader.decodeFromVideoElementContinuously, "function");
+  assert.equal(typeof reader.stopContinuousDecode, "function");
+  assert.equal(typeof reader.reset, "function");
+});
+
+test("scanner build cache is bumped for scanner recovery", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-1/);
   assert.match(appSource, /zxing-library\.min\.js\?v=typed-pw-suggest-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
@@ -32,6 +42,12 @@ test("resolved catalog products preserve the exact scanned barcode", () => {
 test("camera requires repeated matching barcode reads and excludes ProcureWizard PIDs from physical index", () => {
   assert.match(appSource, /confirmBarcodeCandidate/);
   assert.match(appSource, /alias\.label === "ProcureWizard PID"/);
+});
+
+test("scanner startup attempts the camera regardless of permission-query support", () => {
+  const initSource = appSource.slice(appSource.indexOf("async function init()"), appSource.indexOf("async function initServiceWorker()"));
+  assert.match(initSource, /ensureCameraStarted\(\)\.catch\(reportCameraError\)/);
+  assert.doesNotMatch(initSource, /camera_permission !== "granted"/);
 });
 
 test("phone export exposes all scanned lines without mapping", () => {
