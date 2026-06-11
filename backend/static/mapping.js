@@ -7,7 +7,7 @@ import {
   confirmBarcodeCandidate,
   decodedBarcodeText,
   normalizeBarcode
-} from "./frontend-utils.js?v=barcode-canonical-2";
+} from "./frontend-utils.js?v=multi-barcode-confirm-1";
 
 const els = {
   loginView: document.querySelector("#mappingLoginView"),
@@ -282,9 +282,11 @@ function showMapConfirmation(productId) {
   if (!product || !state.currentBarcode) return;
   state.pendingProduct = product;
   const photo = product.photo_url || "";
-  const aliases = Array.isArray(product.barcodes)
-    ? product.barcodes.map((alias) => alias.barcode).filter(Boolean).slice(0, 4).join(", ")
-    : "";
+  const physicalBarcodes = Array.isArray(product.barcodes)
+    ? product.barcodes.filter((alias) => alias.label !== "ProcureWizard PID").map((alias) => alias.barcode).filter(Boolean)
+    : [];
+  const aliases = physicalBarcodes.slice(0, 4).join(", ");
+  const addingAnother = physicalBarcodes.length > 0 && !physicalBarcodes.includes(state.currentBarcode);
   els.confirmPanel.innerHTML = `
     <p class="mapping-kicker">Confirm mapping</p>
     <div class="mapping-confirm-product">
@@ -294,10 +296,11 @@ function showMapConfirmation(productId) {
         <p>Scanned barcode: <strong>${escapeHtml(state.currentBarcode)}</strong></p>
         <small>BIN ${escapeHtml(product.bin || product.procurewizard?.bin_number || "-")} | PID ${escapeHtml(product.procurewizard?.pid || "-")} | ${escapeHtml(product.size || product.procurewizard?.pack_size || "-")}</small>
         ${aliases ? `<small>Known barcodes: ${escapeHtml(aliases)}</small>` : ""}
+        ${addingAnother ? `<p class="mapping-barcode-warning"><strong>This product already has ${physicalBarcodes.length} physical barcode${physicalBarcodes.length === 1 ? "" : "s"}.</strong> Confirm this is another valid bottle, case, or packaging barcode for the same product.</p>` : ""}
       </div>
     </div>
     <div class="mapping-confirm-actions">
-      <button id="mappingConfirmMap" type="button">Map to this product</button>
+      <button id="mappingConfirmMap" type="button">${addingAnother ? "Confirm & Add Another Barcode" : "Map to this product"}</button>
       <button id="mappingCancelMap" class="mapping-secondary" type="button">Choose another</button>
     </div>
   `;
@@ -307,6 +310,9 @@ function showMapConfirmation(productId) {
 
 async function mapToProduct(productId) {
   if (!state.currentBarcode || state.saveInFlight) return;
+  const existingPhysical = Array.isArray(state.pendingProduct?.barcodes)
+    ? state.pendingProduct.barcodes.filter((alias) => alias.label !== "ProcureWizard PID")
+    : [];
   state.saveInFlight = true;
   try {
     const result = await api(`/admin/api/products/${encodeURIComponent(productId)}/barcodes`, {
@@ -315,6 +321,7 @@ async function mapToProduct(productId) {
         barcode: state.currentBarcode,
         label: "Mapped barcode",
         is_primary: false,
+        confirm_additional_barcode: existingPhysical.length > 0,
         source_screen: "phone_mapping"
       })
     });

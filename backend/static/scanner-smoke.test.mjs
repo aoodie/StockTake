@@ -13,8 +13,8 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("scanner build cache is bumped for quantity keypad", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=barcode-canonical-2/);
+test("scanner build cache is bumped for multi-barcode confirmation", () => {
+  assert.match(appSource, /frontend-utils\.js\?v=multi-barcode-confirm-1/);
   assert.match(appSource, /zxing-library\.min\.js\?v=typed-pw-suggest-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);

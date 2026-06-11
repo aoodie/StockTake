@@ -609,6 +609,23 @@ def admin_add_product_barcode(
                 "barcode": owner["barcode"],
                 "mapping_audit_id": None,
             }
+        existing_physical = [
+            row["barcode"]
+            for row in db.execute(
+                """
+                SELECT barcode
+                FROM product_barcodes
+                WHERE product_id = ? AND COALESCE(label, '') != 'ProcureWizard PID'
+                ORDER BY created_at, barcode
+                """,
+                (product_id,),
+            ).fetchall()
+        ]
+        if existing_physical and not request.confirm_additional_barcode:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Product already has physical barcode(s): {', '.join(existing_physical)}. Confirm before adding another.",
+            )
         result = db.execute(
             """
             INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
@@ -631,7 +648,11 @@ def admin_add_product_barcode(
             "add_alias",
             request.label,
             request.source_screen,
-            {"is_primary": request.is_primary},
+            {
+                "is_primary": request.is_primary,
+                "confirmed_additional_barcode": bool(existing_physical),
+                "existing_physical_barcodes": existing_physical,
+            },
         )
         db.commit()
     return {"status": "saved", "product_id": product_id, "barcode": barcode, "mapping_audit_id": mapping_audit_id}

@@ -88,6 +88,7 @@ class ProductBarcodeRequest(BaseModel):
     barcode: str = Field(min_length=1)
     label: str = "Alias barcode"
     is_primary: bool = False
+    confirm_additional_barcode: bool = False
     source_screen: Literal["admin", "admin_mapping", "phone_mapping"] = "admin"
 
 class ProductMergeRequest(BaseModel):

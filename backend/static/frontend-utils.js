@@ -1,5 +1,5 @@
-export const APP_VERSION = "2026.06.11.3";
-export const CACHE_NAME = "stocktake-v33";
+export const APP_VERSION = "2026.06.11.4";
+export const CACHE_NAME = "stocktake-v34";
 export const SCAN_DEBOUNCE_MS = 700;
 export const CAMERA_DETECT_INTERVAL_MS = 90;
 export const ZXING_DETECT_INTERVAL_MS = 130;

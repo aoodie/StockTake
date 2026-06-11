@@ -937,6 +937,14 @@ dialog {
   gap: 10px;
   margin-top: 14px;
 }
+
+.mapping-barcode-warning {
+  margin-top: 12px;
+  padding: 12px;
+  border: 2px solid #f59e0b;
+  background: #2b210c;
+  color: #fff3c4;
+}
 .mapping-confirm-actions button {
   min-height: 48px;
 }

@@ -27,7 +27,7 @@ def test_mapping_page_is_served():
     client = TestClient(app)
     response = client.get("/mapping")
     assert response.status_code == 200
-    assert "mapping.js?v=barcode-canonical-2" in response.text
+    assert "mapping.js?v=multi-barcode-confirm-1" in response.text
 
 
 def test_admin_page_loads_ai_copilot_bundle():
@@ -226,7 +226,7 @@ def test_admin_task_approval_cannot_steal_existing_barcode_alias(tmp_path, monke
     assert owner.status_code == 200
     alias = client.post(
         "/admin/api/products/product-owner-primary/barcodes",
-        json={"barcode": "stolen", "label": "Bottle barcode"},
+        json={"barcode": "stolen", "label": "Bottle barcode", "confirm_additional_barcode": True},
     )
     assert alias.status_code == 200
 
@@ -279,7 +279,7 @@ def test_admin_task_approval_with_draft_product_cannot_ignore_owned_barcode(tmp_
     assert owner.status_code == 200
     alias = client.post(
         "/admin/api/products/product-owner-primary/barcodes",
-        json={"barcode": "stolen-draft", "label": "Bottle barcode"},
+        json={"barcode": "stolen-draft", "label": "Bottle barcode", "confirm_additional_barcode": True},
     )
     assert alias.status_code == 200
 
@@ -409,7 +409,7 @@ def test_product_alias_issue_detail_and_merge_workflow(tmp_path, monkeypatch):
 
     alias = client.post(
         "/admin/api/products/product-111/barcodes",
-        json={"barcode": "case-111", "label": "Case barcode"},
+        json={"barcode": "case-111", "label": "Case barcode", "confirm_additional_barcode": True},
     )
     assert alias.status_code == 200
 
@@ -556,7 +556,12 @@ def test_barcode_mapping_recent_and_undo_alias(tmp_path, monkeypatch):
 
     mapped = client.post(
         "/admin/api/products/product-primary-undo/barcodes",
-        json={"barcode": "alias-undo", "label": "Bottle barcode", "source_screen": "phone_mapping"},
+        json={
+            "barcode": "alias-undo",
+            "label": "Bottle barcode",
+            "confirm_additional_barcode": True,
+            "source_screen": "phone_mapping",
+        },
     )
     assert mapped.status_code == 200
     audit_id = mapped.json()["mapping_audit_id"]
@@ -602,7 +607,12 @@ def test_barcode_mapping_same_product_primary_is_not_audited_or_undoable(tmp_pat
 
     alias = client.post(
         "/admin/api/products/product-primary-safe/barcodes",
-        json={"barcode": "alias-safe", "label": "Bottle barcode", "source_screen": "phone_mapping"},
+        json={
+            "barcode": "alias-safe",
+            "label": "Bottle barcode",
+            "confirm_additional_barcode": True,
+            "source_screen": "phone_mapping",
+        },
     )
     assert alias.status_code == 200
 
@@ -770,13 +780,69 @@ def test_product_can_have_multiple_distinct_physical_barcodes(tmp_path, monkeypa
 
     alias = client.post(
         f"/admin/api/products/{product_id}/barcodes",
-        json={"barcode": "3049614223389", "label": "Case barcode", "source_screen": "phone_mapping"},
+        json={
+            "barcode": "3049614223389",
+            "label": "Case barcode",
+            "confirm_additional_barcode": True,
+            "source_screen": "phone_mapping",
+        },
     )
     assert alias.status_code == 200
 
     detail = client.get(f"/admin/api/products/{product_id}").json()["product"]
     real_codes = {row["barcode"] for row in detail["barcodes"] if row["label"] != "ProcureWizard PID"}
     assert real_codes == {"088110552404", "3049614223389"}
+
+
+def test_additional_physical_barcode_requires_explicit_confirmation(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post(
+        "/admin/api/products",
+        json={"barcode": "088110552404", "name": "Multiple Barcode Product", "bin": "A-1"},
+    )
+    assert created.status_code == 200
+    product_id = created.json()["product_id"]
+
+    blocked = client.post(
+        f"/admin/api/products/{product_id}/barcodes",
+        json={"barcode": "3049614223389", "label": "Case barcode"},
+    )
+    assert blocked.status_code == 409
+    assert "Confirm before adding another" in blocked.json()["detail"]
+
+    confirmed = client.post(
+        f"/admin/api/products/{product_id}/barcodes",
+        json={
+            "barcode": "3049614223389",
+            "label": "Case barcode",
+            "confirm_additional_barcode": True,
+        },
+    )
+    assert confirmed.status_code == 200
+
+    csv_text = "\n".join(
+        [
+            "21041,928291,<-- Do not delete or edit,,,,,,,",
+            "PID,[E]Bin number,[E]Pos,Tertiary Category,Brand & Description,Pack Size,Est FC,Est SC,[E]Close FC,[E]Close SC",
+            "3862551,3862551,,Wine,Imported Wine,6 x 75cl,0,0,,",
+        ]
+    )
+    imported = client.post(
+        "/admin/api/procurewizard/import",
+        json={"filename": "pw.csv", "csv_text": csv_text},
+    )
+    assert imported.status_code == 200
+    first_physical = client.post(
+        "/admin/api/products/procurewizard-3862551/barcodes",
+        json={"barcode": "5010327001234", "label": "Bottle barcode"},
+    )
+    assert first_physical.status_code == 200
 
 
 def test_product_patch_rejects_barcode_changes(tmp_path, monkeypatch):

@@ -829,6 +829,15 @@ async function saveMappedBarcode() {
     els.mappingBarcodeInput.focus();
     return;
   }
+  const physicalBarcodes = (product.barcodes || [])
+    .filter((alias) => alias.label !== "ProcureWizard PID")
+    .map((alias) => alias.barcode);
+  const addingAnother = physicalBarcodes.length > 0 && !physicalBarcodes.includes(barcode);
+  if (addingAnother && !(await confirmDialog(
+    "Add another physical barcode?",
+    `${product.name} already has: ${physicalBarcodes.join(", ")}. Confirm ${barcode} is another valid bottle, case, or packaging barcode for this same product.`,
+    "Confirm & Add"
+  ))) return;
   try {
     await api(`/admin/api/products/${encodeURIComponent(product.id)}/barcodes`, {
       method: "POST",
@@ -836,6 +845,7 @@ async function saveMappedBarcode() {
         barcode,
         label: els.mappingLabelInput.value.trim() || "Mapped barcode",
         is_primary: false,
+        confirm_additional_barcode: addingAnother,
         source_screen: "admin_mapping"
       })
     });
@@ -1266,13 +1276,24 @@ async function addSelectedProductAlias() {
     showToast("Enter an alias barcode", "error");
     return;
   }
+  const physicalBarcodes = (product.barcodes || [])
+    .filter((alias) => alias.label !== "ProcureWizard PID")
+    .map((alias) => alias.barcode);
+  const addingAnother = physicalBarcodes.length > 0 && !physicalBarcodes.includes(barcode);
+  if (addingAnother && !(await confirmDialog(
+    "Add another physical barcode?",
+    `${product.name} already has: ${physicalBarcodes.join(", ")}. Confirm ${barcode} belongs to the same product.`,
+    "Confirm & Add"
+  ))) return;
   try {
     await api(`/admin/api/products/${encodeURIComponent(product.id)}/barcodes`, {
       method: "POST",
       body: JSON.stringify({
         barcode,
         label: els.aliasLabel.value.trim() || "Alias barcode",
-        is_primary: false
+        is_primary: false,
+        confirm_additional_barcode: addingAnother,
+        source_screen: "admin"
       })
     });
     showToast("Barcode alias added");
