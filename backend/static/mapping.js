@@ -27,7 +27,6 @@ const els = {
   showExisting: document.querySelector("#mappingShowExisting"),
   showCreate: document.querySelector("#mappingShowCreate"),
   scanNext: document.querySelector("#mappingScanNext"),
-  clear: document.querySelector("#mappingClear"),
   existingPanel: document.querySelector("#mappingExistingPanel"),
   confirmPanel: document.querySelector("#mappingConfirmPanel"),
   productSearchForm: document.querySelector("#mappingProductSearchForm"),
@@ -558,7 +557,6 @@ function bindEvents() {
     openCreatePanel();
   });
   els.scanNext.addEventListener("click", () => resetForNext(true));
-  els.clear.addEventListener("click", () => resetForNext(true));
   els.productSearchForm.addEventListener("submit", (event) => {
     event.preventDefault();
     searchProducts();
@@ -566,6 +564,11 @@ function bindEvents() {
   els.productSearch.addEventListener("input", () => {
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(() => searchProducts(), 250);
+  });
+  els.productSearch.addEventListener("focus", () => {
+    if (!els.productSearch.value) return;
+    els.productSearch.value = "";
+    els.productResults.innerHTML = "";
   });
   els.productResults.addEventListener("click", (event) => {
     if (event.target.closest(".mapping-create-draft-cta")) {
