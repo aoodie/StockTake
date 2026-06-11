@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import {
   addDecimalStrings,
   barcodeLookupKeys,
+  canonicalizeBarcode,
+  confirmBarcodeCandidate,
   decodedBarcodeText,
+  isValidGtin,
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity,
@@ -26,14 +29,26 @@ test("quantity validation accepts explicit zero and decimals", () => {
   assert.equal(isValidQuantity(""), false);
 });
 
-test("barcode helpers preserve leading zeros but add numeric lookup keys", () => {
+test("barcode helpers display equivalent EAN-13 as printed UPC-A", () => {
   assert.equal(normalizeBarcode(" 001234 "), "001234");
-  assert.deepEqual(barcodeLookupKeys("001234").slice(0, 2), ["001234", "1234"]);
+  assert.equal(isValidGtin("088110552404"), true);
+  assert.equal(canonicalizeBarcode("0088110552404"), "088110552404");
+  assert.deepEqual(barcodeLookupKeys("0088110552404"), ["088110552404", "0088110552404"]);
+  assert.deepEqual(barcodeLookupKeys("001234"), ["001234"]);
 });
 
 test("decoded barcode text supports native and ZXing results", () => {
   assert.equal(decodedBarcodeText({ rawValue: " 123 " }), "123");
-  assert.equal(decodedBarcodeText({ getText: () => " 456 " }), "456");
+  assert.equal(decodedBarcodeText({ getText: () => " 0088110552404 " }), "088110552404");
+});
+
+test("camera barcode requires two matching reads", () => {
+  const first = confirmBarcodeCandidate(null, "088110552404", 1000);
+  assert.equal(first.confirmed, false);
+  const mismatch = confirmBarcodeCandidate(first.candidate, "3081880552404", 1100);
+  assert.equal(mismatch.confirmed, false);
+  const confirmed = confirmBarcodeCandidate(mismatch.candidate, "3081880552404", 1200);
+  assert.equal(confirmed.confirmed, true);
 });
 
 test("scanner block reason reports only active blockers", () => {

@@ -4,7 +4,7 @@ from typing import Any
 import sqlite3
 import json
 from ..database import (
-    get_db, now_iso, normalize_identifier, init_db,
+    barcode_lookup_values, canonicalize_barcode, get_db, now_iso, normalize_identifier, init_db,
     product_select_sql, task_from_row, ensure_default_rows
 )
 from ..models import (
@@ -86,23 +86,6 @@ def audit_barcode_mapping(
     )
     return int(cursor.lastrowid)
 
-def barcode_lookup_values(value: str) -> list[str]:
-    code = normalize_identifier(value)
-    if not code:
-        return []
-    values = [code]
-    if code.isdigit():
-        stripped = code.lstrip("0") or "0"
-        values.append(stripped)
-        values.extend([
-            stripped.zfill(8),
-            stripped.zfill(12),
-            stripped.zfill(13),
-        ])
-        if len(code) in {8, 12, 13}:
-            values.append(code.lstrip("0") or code)
-    return list(dict.fromkeys(values))
-
 def product_snapshot(db: sqlite3.Connection, product_id: str) -> dict[str, Any] | None:
     row = db.execute(f"{product_select_sql()} WHERE id = ?", (product_id,)).fetchone()
     if not row:
@@ -123,7 +106,7 @@ def product_snapshot(db: sqlite3.Connection, product_id: str) -> dict[str, Any] 
     return product
 
 def ensure_primary_barcode_alias(db: sqlite3.Connection, product_id: str, barcode: str, current: str | None = None) -> None:
-    barcode = normalize_identifier(barcode)
+    barcode = canonicalize_barcode(barcode)
     if not barcode:
         return
     owner = db.execute(
@@ -432,7 +415,7 @@ def admin_barcode_mapping_lookup(
 ) -> dict:
     require_admin(_)
     init_db()
-    code = normalize_identifier(barcode)
+    code = canonicalize_barcode(barcode)
     codes = barcode_lookup_values(code)
     if not codes:
         return {"barcode": code, "owner": None}
@@ -444,9 +427,11 @@ def admin_barcode_mapping_lookup(
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
             WHERE pb.barcode IN ({placeholders})
+              AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            ORDER BY CASE WHEN pb.barcode = ? THEN 0 ELSE 1 END
             LIMIT 1
             """,
-            codes,
+            (*codes, code),
         ).fetchone()
     return {"barcode": code, "owner": dict(row) if row else None}
 
@@ -500,7 +485,7 @@ def admin_create_product(
 ) -> dict:
     require_admin(_)
     init_db()
-    barcode = normalize_identifier(request.barcode)
+    barcode = canonicalize_barcode(request.barcode)
     codes = barcode_lookup_values(barcode)
     if not codes:
         raise HTTPException(status_code=400, detail="Barcode is required")
@@ -598,7 +583,7 @@ def admin_add_product_barcode(
 ) -> dict:
     require_admin(_)
     init_db()
-    barcode = normalize_identifier(request.barcode)
+    barcode = canonicalize_barcode(request.barcode)
     codes = barcode_lookup_values(barcode)
     if not codes:
         raise HTTPException(status_code=400, detail="Barcode is required")
@@ -659,7 +644,7 @@ def admin_delete_product_barcode(
 ) -> dict:
     require_admin(_)
     init_db()
-    barcode = normalize_identifier(barcode)
+    barcode = canonicalize_barcode(barcode)
     with get_db() as db:
         before = product_snapshot(db, product_id)
         if not before:
@@ -881,7 +866,7 @@ def admin_lookup_product(
 ) -> dict:
     require_admin(_)
     init_db()
-    barcode = normalize_identifier(barcode)
+    barcode = canonicalize_barcode(barcode)
     if not barcode:
         raise HTTPException(status_code=400, detail="Barcode is required")
     codes = barcode_lookup_values(barcode)
@@ -895,9 +880,11 @@ def admin_lookup_product(
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
             WHERE pb.barcode IN ({placeholders})
+              AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            ORDER BY CASE WHEN pb.barcode = ? THEN 0 ELSE 1 END
             LIMIT 1
             """,
-            codes,
+            (*codes, barcode),
         ).fetchone()
         if owner:
             return {"barcode": barcode, "exists": True, "product": mapping_product(db, owner), "suggested": {}}
@@ -944,7 +931,7 @@ def admin_undo_barcode_mapping(
             raise HTTPException(status_code=400, detail="This mapping has already been undone.")
 
         product_id = row["product_id"]
-        barcode = normalize_identifier(row["barcode"])
+        barcode = canonicalize_barcode(row["barcode"])
         before = product_snapshot(db, product_id)
         if row["action"] == "add_alias":
             alias = db.execute(

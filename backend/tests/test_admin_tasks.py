@@ -27,7 +27,7 @@ def test_mapping_page_is_served():
     client = TestClient(app)
     response = client.get("/mapping")
     assert response.status_code == 200
-    assert "mapping.js?v=search-clear-1" in response.text
+    assert "mapping.js?v=barcode-canonical-1" in response.text
 
 
 def test_admin_page_loads_ai_copilot_bundle():
@@ -690,7 +690,7 @@ def test_barcode_mapping_create_undo_blocked_after_bulk_update(tmp_path, monkeyp
     assert detail.json()["product"]["bin"] == "B-2"
 
 
-def test_barcode_mapping_rejects_leading_zero_variant_duplicate(tmp_path, monkeypatch):
+def test_barcode_mapping_does_not_merge_invalid_numeric_padding_variants(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
@@ -708,12 +708,12 @@ def test_barcode_mapping_rejects_leading_zero_variant_duplicate(tmp_path, monkey
         "/admin/api/products",
         json={"barcode": "12345678905", "name": "Duplicate UPC", "bin": "A-2"},
     )
-    assert duplicate.status_code == 400
+    assert duplicate.status_code == 200
 
     lookup = client.get("/admin/api/products/lookup/12345678905")
     assert lookup.status_code == 200
     assert lookup.json()["exists"] is True
-    assert lookup.json()["product"]["name"] == "UPC Variant Product"
+    assert lookup.json()["product"]["name"] == "Duplicate UPC"
 
 
 def test_barcode_mapping_rejects_transitive_upc_ean_variants(tmp_path, monkeypatch):
@@ -729,8 +729,9 @@ def test_barcode_mapping_rejects_transitive_upc_ean_variants(tmp_path, monkeypat
         json={"barcode": "0012345678905", "name": "EAN Variant Product", "bin": "A-1"},
     )
     assert first.status_code == 200
+    product_id = first.json()["product_id"]
 
-    for variant in ("012345678905", "12345678905"):
+    for variant in ("012345678905",):
         lookup = client.get(f"/admin/api/products/lookup/{variant}")
         assert lookup.status_code == 200
         assert lookup.json()["exists"] is True
@@ -743,13 +744,39 @@ def test_barcode_mapping_rejects_transitive_upc_ean_variants(tmp_path, monkeypat
         assert duplicate.status_code == 400
 
         other = client.post(
-            "/admin/api/products/product-0012345678905/barcodes",
+            f"/admin/api/products/{product_id}/barcodes",
             json={"barcode": variant, "label": "Variant barcode", "source_screen": "phone_mapping"},
         )
         assert other.status_code in {200, 400}
         if other.status_code == 200:
             assert other.json()["status"] == "already_mapped"
             assert other.json()["mapping_audit_id"] is None
+
+
+def test_product_can_have_multiple_distinct_physical_barcodes(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post(
+        "/admin/api/products",
+        json={"barcode": "088110552404", "name": "Bottle With Two Barcodes", "bin": "A-1"},
+    )
+    assert created.status_code == 200
+    product_id = created.json()["product_id"]
+
+    alias = client.post(
+        f"/admin/api/products/{product_id}/barcodes",
+        json={"barcode": "3049614223389", "label": "Case barcode", "source_screen": "phone_mapping"},
+    )
+    assert alias.status_code == 200
+
+    detail = client.get(f"/admin/api/products/{product_id}").json()["product"]
+    real_codes = {row["barcode"] for row in detail["barcodes"] if row["label"] != "ProcureWizard PID"}
+    assert real_codes == {"088110552404", "3049614223389"}
 
 
 def test_product_patch_rejects_barcode_changes(tmp_path, monkeypatch):

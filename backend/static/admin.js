@@ -862,16 +862,17 @@ async function openProductDetail(productId) {
     els.mergeSourceProductId.value = "";
     els.aliasBarcode.value = "";
     els.aliasLabel.value = "";
+    const primaryLabel = product.procurewizard ? "ProcureWizard PID" : "Primary barcode";
     els.productDetailSummary.innerHTML = `
       <p><strong>ID:</strong> ${escapeHtml(product.id)}</p>
-      <p><strong>Primary barcode:</strong> ${escapeHtml(product.barcode || "None")}</p>
+      <p><strong>${primaryLabel}:</strong> ${escapeHtml(product.procurewizard?.pid || product.barcode || "None")}</p>
       <p><strong>BIN:</strong> ${escapeHtml(product.bin || "Missing")} · <strong>Status:</strong> ${escapeHtml(product.draft_status)}</p>
     `;
     els.productAliasList.innerHTML = `
       <h3>Barcode Aliases</h3>
       ${(product.barcodes || []).map((alias) => `
         <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-          <span>${escapeHtml(alias.barcode)} · ${escapeHtml(alias.label || "Alias")} ${alias.is_primary ? "· Primary" : ""}</span>
+          <span>${escapeHtml(alias.barcode)} · ${escapeHtml(alias.label || "Alias")} ${alias.is_primary && alias.label !== "ProcureWizard PID" ? "· Primary" : ""}</span>
           ${alias.is_primary ? "" : `<button class="secondary warning" data-action="delete-alias" data-barcode="${escapeHtml(alias.barcode)}" type="button">Remove</button>`}
         </div>
       `).join("") || `<p class="meta">No aliases yet.</p>`}

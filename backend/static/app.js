@@ -8,12 +8,14 @@ import {
   ZXING_FAST_FORMATS,
   addDecimalStrings,
   barcodeLookupKeys,
+  canonicalizeBarcode,
+  confirmBarcodeCandidate,
   decodedBarcodeText,
   isValidQuantity,
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=exact-scan-barcode-1";
+} from "./frontend-utils.js?v=barcode-canonical-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -185,6 +187,7 @@ let state = {
   lastScanAt: 0,
   lastManualBarcode: null,
   lastManualScanAt: 0,
+  barcodeCandidate: null,
   hardwareBlockedUntil: 0,
   sleeping: false,
   scanInFlight: false,
@@ -438,13 +441,12 @@ async function cacheProduct(product) {
 }
 
 function indexProduct(product) {
-  const keys = barcodeLookupKeys(product.barcode);
-  if (product.barcode_raw) keys.push(...barcodeLookupKeys(product.barcode_raw));
+  const isProcureWizardProduct = Boolean(product.procurewizard || String(product.id || "").startsWith("procurewizard-"));
+  const keys = isProcureWizardProduct ? [] : barcodeLookupKeys(product.barcode);
+  if (product.barcode_raw && !isProcureWizardProduct) keys.push(...barcodeLookupKeys(product.barcode_raw));
   for (const alias of product.barcodes || []) {
+    if (alias.label === "ProcureWizard PID") continue;
     keys.push(...barcodeLookupKeys(alias.barcode));
-  }
-  if (product.procurewizard?.pid) {
-    keys.push(...barcodeLookupKeys(product.procurewizard.pid));
   }
   for (const key of new Set(keys)) {
     productIndex.set(key, product);
@@ -570,7 +572,7 @@ async function showSessionDialog(force = false) {
 }
 
 async function getProduct(barcode) {
-  const normalized = normalizeBarcode(barcode);
+  const normalized = canonicalizeBarcode(barcode);
   for (const key of barcodeLookupKeys(normalized)) {
     const indexed = productIndex.get(key);
     if (indexed) {
@@ -906,7 +908,7 @@ async function commitScanQuantity(product, quantity, { mergeDuplicate = false, r
 }
 
 async function handleScan(barcode, options = {}) {
-  barcode = normalizeBarcode(barcode);
+  barcode = canonicalizeBarcode(barcode);
   updateDiagnostics({ last_raw_barcode: barcode || "-", decoder_heartbeat: new Date().toLocaleTimeString() });
   if (!barcode) {
     rejectScan("empty barcode");
@@ -1756,7 +1758,12 @@ async function runZxingVideoLoop(reader, generation) {
         const barcode = decodedBarcodeText(result);
         if (barcode) {
           updateDiagnostics({ last_raw_barcode: barcode });
-          await handleScan(barcode);
+          const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+          state.barcodeCandidate = decision.candidate;
+          if (decision.confirmed) {
+            state.barcodeCandidate = null;
+            await handleScan(barcode);
+          }
         }
       } catch (error) {
         updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString() });
@@ -1820,7 +1827,12 @@ async function runNativeScanLoop(detector, generation) {
         if (barcode) {
           emptyFrames = 0;
           updateDiagnostics({ last_raw_barcode: barcode });
-          await handleScan(barcode);
+          const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+          state.barcodeCandidate = decision.candidate;
+          if (decision.confirmed) {
+            state.barcodeCandidate = null;
+            await handleScan(barcode);
+          }
         } else {
           emptyFrames += 1;
           if (emptyFrames >= 45) {
@@ -2014,7 +2026,7 @@ async function processManualScan() {
   const rawInput = els.manualBarcode.value;
   els.manualBarcode.value = "";
 
-  const barcode = normalizeBarcode(rawInput);
+  const barcode = canonicalizeBarcode(rawInput);
   if (!barcode) return;
   if (state.pendingBarcode && state.pendingBarcode !== barcode) {
     const replace = await confirmDialog("Replace pending scan", "There is an unsaved scanned product. Replace it with this manual barcode?", "Replace");

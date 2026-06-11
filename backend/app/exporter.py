@@ -45,7 +45,9 @@ def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_sna
             cell.fill = PatternFill("solid", fgColor="E8EEF7")
 
     bin_value = "COALESCE(sl.bin_snapshot, p.bin, '')" if prefer_scan_snapshots else "COALESCE(p.bin, sl.bin_snapshot, '')"
-    barcode_value = "COALESCE(sl.barcode_snapshot, p.barcode, '')" if prefer_scan_snapshots else "COALESCE(p.barcode, sl.barcode_snapshot, '')"
+    # The catalog barcode may be an external reference such as a ProcureWizard PID.
+    # A stocktake export must always identify the physical barcode that was scanned.
+    barcode_value = "COALESCE(sl.barcode_snapshot, p.barcode, '')"
     name_value = "COALESCE(sl.product_name_snapshot, p.name, '')" if prefer_scan_snapshots else "COALESCE(p.name, sl.product_name_snapshot, '')"
     draft_value = "COALESCE(sl.draft_status, p.draft_status, 'confirmed')" if prefer_scan_snapshots else "COALESCE(p.draft_status, sl.draft_status, 'confirmed')"
     rows = db.execute(

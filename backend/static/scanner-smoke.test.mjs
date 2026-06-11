@@ -14,7 +14,7 @@ test("main scanner uses an app-controlled direct video decode loop", () => {
 });
 
 test("scanner build cache is bumped for quantity keypad", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=exact-scan-barcode-1/);
+  assert.match(appSource, /frontend-utils\.js\?v=barcode-canonical-1/);
   assert.match(appSource, /zxing-library\.min\.js\?v=typed-pw-suggest-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
@@ -27,6 +27,11 @@ test("resolved catalog products preserve the exact scanned barcode", () => {
   assert.match(getProductSource, /catalog_barcode:/);
   assert.match(appSource, /barcode: line\.barcode/);
   assert.match(appSource, /currentProductCount\(product\)/);
+});
+
+test("camera requires repeated matching barcode reads and excludes ProcureWizard PIDs from physical index", () => {
+  assert.match(appSource, /confirmBarcodeCandidate/);
+  assert.match(appSource, /alias\.label === "ProcureWizard PID"/);
 });
 
 test("phone export exposes all scanned lines without mapping", () => {

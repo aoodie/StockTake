@@ -22,6 +22,32 @@ def get_db() -> sqlite3.Connection:
 def normalize_identifier(value: Any) -> str:
     return str(value or "").strip()
 
+def is_valid_gtin(value: str) -> bool:
+    if not value.isdigit() or len(value) not in {8, 12, 13, 14}:
+        return False
+    digits = [int(digit) for digit in value]
+    total = sum(
+        digit * (3 if (len(digits) - 1 - index) % 2 == 1 else 1)
+        for index, digit in enumerate(digits[:-1])
+    )
+    return (10 - total % 10) % 10 == digits[-1]
+
+def canonicalize_barcode(value: Any) -> str:
+    barcode = normalize_identifier(value)
+    if len(barcode) == 13 and barcode.startswith("0") and is_valid_gtin(barcode):
+        return barcode[1:]
+    return barcode
+
+def barcode_lookup_values(value: Any) -> list[str]:
+    raw = normalize_identifier(value)
+    canonical = canonicalize_barcode(raw)
+    if not canonical:
+        return []
+    values = [canonical, raw]
+    if len(canonical) == 12 and is_valid_gtin(canonical):
+        values.append(f"0{canonical}")
+    return list(dict.fromkeys(values))
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

@@ -3,9 +3,11 @@ import {
   CAMERA_DETECT_INTERVAL_MS,
   SCAN_DEBOUNCE_MS,
   ZXING_FAST_FORMATS,
+  canonicalizeBarcode,
+  confirmBarcodeCandidate,
   decodedBarcodeText,
   normalizeBarcode
-} from "./frontend-utils.js?v=phone-mapping-4";
+} from "./frontend-utils.js?v=barcode-canonical-1";
 
 const els = {
   loginView: document.querySelector("#mappingLoginView"),
@@ -52,6 +54,7 @@ const state = {
   scanInFlight: false,
   lastBarcode: "",
   lastScanAt: 0,
+  barcodeCandidate: null,
   currentBarcode: "",
   currentSuggestion: {},
   scanLocked: false,
@@ -154,7 +157,7 @@ function prefillCreateForm(suggestion = {}, barcode = state.currentBarcode) {
 }
 
 async function lookupBarcode(rawBarcode) {
-  const barcode = normalizeBarcode(rawBarcode);
+  const barcode = canonicalizeBarcode(rawBarcode);
   if (!barcode || state.scanInFlight) return;
   if (state.scanLocked) return;
   const now = Date.now();
@@ -497,7 +500,12 @@ async function runNativeLoop() {
       if (!state.scanInFlight && !state.scanLocked && els.preview.readyState >= 2) {
         const codes = await state.detector.detect(els.preview);
         const barcode = decodedBarcodeText(codes[0]);
-        if (barcode) await lookupBarcode(barcode);
+        const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+        state.barcodeCandidate = decision.candidate;
+        if (decision.confirmed) {
+          state.barcodeCandidate = null;
+          await lookupBarcode(barcode);
+        }
       }
     } catch {
       // Camera frames can fail while focus/exposure settles.
@@ -521,7 +529,12 @@ function startZxingLoop() {
   state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, 180);
   state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
     const barcode = decodedBarcodeText(result);
-    if (barcode && !state.scanInFlight && !state.scanLocked) lookupBarcode(barcode);
+    const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+    state.barcodeCandidate = decision.candidate;
+    if (decision.confirmed && !state.scanInFlight && !state.scanLocked) {
+      state.barcodeCandidate = null;
+      lookupBarcode(barcode);
+    }
   });
 }
 

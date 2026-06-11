@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response
 from ..database import (
-    get_db, now_iso, normalize_identifier, init_db,
+    barcode_lookup_values, canonicalize_barcode, get_db, now_iso, normalize_identifier, init_db,
     ensure_default_rows, get_setting, product_select_sql
 )
 from ..models import (
@@ -23,19 +23,6 @@ def require_sync_write_token(x_stocktake_sync_token: str | None = Header(default
     required = os.getenv("STOCKTAKE_SYNC_TOKEN", "").strip()
     if required and x_stocktake_sync_token != required:
         raise HTTPException(status_code=403, detail="Sync token required")
-
-def barcode_lookup_values(value: str) -> list[str]:
-    code = normalize_identifier(value)
-    if not code:
-        return []
-    values = [code]
-    if code.isdigit():
-        stripped = code.lstrip("0") or "0"
-        values.append(stripped)
-        values.extend([stripped.zfill(8), stripped.zfill(12), stripped.zfill(13)])
-        if len(code) in {8, 12, 13}:
-            values.append(code.lstrip("0") or code)
-    return list(dict.fromkeys(values))
 
 def normalize_event_quantity(value: object) -> str:
     text = normalize_identifier(value)
@@ -72,7 +59,7 @@ def insert_barcode_alias(
     *,
     is_primary: bool,
 ) -> None:
-    barcode = normalize_identifier(barcode)
+    barcode = canonicalize_barcode(barcode)
     if not barcode:
         return
     codes = barcode_lookup_values(barcode)
@@ -209,8 +196,8 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
     if event.event_type == "scan":
         product = payload.get("product") or {}
         product_id = product.get("id")
-        barcode = normalize_identifier(payload.get("barcode") or product.get("barcode"))
-        product["barcode"] = normalize_identifier(product.get("barcode") or barcode)
+        barcode = canonicalize_barcode(payload.get("barcode") or product.get("barcode"))
+        product["barcode"] = canonicalize_barcode(product.get("barcode") or barcode)
         if product_id:
             existing_product = db.execute("SELECT barcode FROM products WHERE id = ?", (product_id,)).fetchone()
             db.execute(
@@ -330,7 +317,7 @@ def apply_event(db: sqlite3.Connection, event: SyncEvent, server_id: str) -> lis
 
     elif event.event_type == "draft_product":
         product_id = payload.get("product_id") or f"draft-{event.local_id}"
-        barcode = normalize_identifier(payload.get("barcode"))
+        barcode = canonicalize_barcode(payload.get("barcode"))
         existing_product = db.execute("SELECT barcode FROM products WHERE id = ?", (product_id,)).fetchone()
         db.execute(
             """
@@ -528,7 +515,7 @@ def catalog() -> dict:
 @router.get("/products/lookup/{barcode}")
 def scanner_lookup_product(barcode: str) -> dict:
     init_db()
-    barcode = normalize_identifier(barcode)
+    barcode = canonicalize_barcode(barcode)
     if not barcode:
         raise HTTPException(status_code=400, detail="Barcode is required")
     codes = barcode_lookup_values(barcode)
@@ -541,9 +528,11 @@ def scanner_lookup_product(barcode: str) -> dict:
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
             WHERE pb.barcode IN ({placeholders})
+              AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            ORDER BY CASE WHEN pb.barcode = ? THEN 0 ELSE 1 END
             LIMIT 1
             """,
-            codes,
+            (*codes, barcode),
         ).fetchone()
         if owner and owner["draft_status"] != "draft":
             product = dict(owner)
@@ -585,7 +574,7 @@ def scanner_product_matches(
 @router.post("/products")
 def upsert_product(request: ProductUpsertRequest, _: None = Depends(require_admin)) -> dict:
     init_db()
-    barcode = normalize_identifier(request.barcode)
+    barcode = canonicalize_barcode(request.barcode)
     product_id = f"product-{barcode}"
     current = now_iso()
     with get_db() as db:

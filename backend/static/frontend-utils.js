@@ -1,5 +1,5 @@
-export const APP_VERSION = "2026.06.11.1";
-export const CACHE_NAME = "stocktake-v31";
+export const APP_VERSION = "2026.06.11.2";
+export const CACHE_NAME = "stocktake-v32";
 export const SCAN_DEBOUNCE_MS = 700;
 export const CAMERA_DETECT_INTERVAL_MS = 90;
 export const ZXING_DETECT_INTERVAL_MS = 130;
@@ -24,21 +24,43 @@ export function normalizeBarcode(value) {
   return String(value ?? "").trim();
 }
 
+export function isValidGtin(value) {
+  const barcode = normalizeBarcode(value);
+  if (!/^\d+$/.test(barcode) || ![8, 12, 13, 14].includes(barcode.length)) return false;
+  const digits = [...barcode].map(Number);
+  const total = digits
+    .slice(0, -1)
+    .reduce((sum, digit, index) => sum + digit * ((digits.length - 1 - index) % 2 === 1 ? 3 : 1), 0);
+  return (10 - (total % 10)) % 10 === digits.at(-1);
+}
+
+export function canonicalizeBarcode(value) {
+  const barcode = normalizeBarcode(value);
+  return barcode.length === 13 && barcode.startsWith("0") && isValidGtin(barcode) ? barcode.slice(1) : barcode;
+}
+
 export function barcodeLookupKeys(value) {
   const raw = normalizeBarcode(value);
-  if (!raw) return [];
-  const keys = [raw];
-  if (/^\d+$/.test(raw)) {
-    keys.push(String(Number(raw)));
-    keys.push(raw.padStart(8, "0"), raw.padStart(12, "0"), raw.padStart(13, "0"));
-  }
+  const canonical = canonicalizeBarcode(raw);
+  if (!canonical) return [];
+  const keys = [canonical, raw];
+  if (canonical.length === 12 && isValidGtin(canonical)) keys.push(`0${canonical}`);
   return [...new Set(keys)];
 }
 
 export function decodedBarcodeText(result) {
   if (!result) return "";
-  if (typeof result.getText === "function") return normalizeBarcode(result.getText());
-  return normalizeBarcode(result.rawValue || result.text || result.toString?.() || "");
+  const raw = typeof result.getText === "function"
+    ? result.getText()
+    : result.rawValue || result.text || result.toString?.() || "";
+  return canonicalizeBarcode(raw);
+}
+
+export function confirmBarcodeCandidate(previous, value, now = Date.now(), windowMs = 1500) {
+  const barcode = canonicalizeBarcode(value);
+  const repeated = previous?.barcode === barcode && now - previous.at <= windowMs;
+  const candidate = { barcode, count: repeated ? previous.count + 1 : 1, at: now };
+  return { candidate, confirmed: Boolean(barcode && candidate.count >= 2) };
 }
 
 export function scannerBlockReason({
