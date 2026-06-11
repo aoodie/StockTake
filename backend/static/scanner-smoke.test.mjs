@@ -79,3 +79,11 @@ test("full-screen confirmation separates full and split case counts", () => {
   assert.match(appSource, /case_type: state\.caseType/);
   assert.match(appSource, /findExistingLineForProduct\(product, state\.caseType\)/);
 });
+
+test("phone outlet fallback includes the operational outlet list", () => {
+  assert.match(appSource, /\{ id: "cellar", name: "Cellar" \}/);
+  assert.match(appSource, /\{ id: "main-bar", name: "Bar" \}/);
+  assert.match(appSource, /\{ id: "brasseries", name: "Brasseries" \}/);
+  assert.match(appSource, /\{ id: "m-and-e", name: "M&E" \}/);
+  assert.match(appSource, /state\.locationName = currentLocation\.name/);
+});

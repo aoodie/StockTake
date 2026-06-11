@@ -365,8 +365,19 @@ def task_from_row(row: sqlite3.Row) -> dict[str, Any]:
 def ensure_default_rows() -> None:
     today = datetime.now().date().isoformat()
     with get_db() as db:
-        db.execute("INSERT OR IGNORE INTO locations (id, name) VALUES ('main-bar', 'Main Bar')")
-        db.execute("INSERT OR IGNORE INTO locations (id, name) VALUES ('cellar', 'Cellar')")
+        db.executemany(
+            """
+            INSERT INTO locations (id, name)
+            VALUES (?, ?)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name
+            """,
+            [
+                ("cellar", "Cellar"),
+                ("main-bar", "Bar"),
+                ("brasseries", "Brasseries"),
+                ("m-and-e", "M&E"),
+            ],
+        )
         db.execute(
             """
             INSERT OR IGNORE INTO sessions (id, name, period_date, status, created_at, updated_at)

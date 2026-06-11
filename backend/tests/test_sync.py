@@ -12,6 +12,24 @@ def open_session(session_id: str = "session-a") -> None:
         )
         db.commit()
 
+def test_catalog_has_operational_outlets_and_renames_main_bar_safely(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute("INSERT INTO locations (id, name) VALUES ('main-bar', 'Main Bar')")
+        db.commit()
+
+    response = TestClient(app).get("/catalog")
+
+    assert response.status_code == 200
+    assert response.json()["locations"] == [
+        {"id": "main-bar", "name": "Bar"},
+        {"id": "brasseries", "name": "Brasseries"},
+        {"id": "cellar", "name": "Cellar"},
+        {"id": "m-and-e", "name": "M&E"},
+    ]
+
 def test_sync_idempotency_ignores_duplicate_events(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")

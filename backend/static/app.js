@@ -176,7 +176,7 @@ let state = {
   sessionId: `session-${today()}`,
   sessionName: today(),
   locationId: "main-bar",
-  locationName: "Main Bar",
+  locationName: "Bar",
   quantity: "",
   caseType: "split",
   currentProduct: null,
@@ -436,9 +436,12 @@ function renderLocations(locations) {
     els.locationSelect.append(option);
     els.sessionLocationSelect.append(option.cloneNode(true));
   }
-  if (!locations.some((location) => location.id === state.locationId)) {
+  const currentLocation = locations.find((location) => location.id === state.locationId);
+  if (!currentLocation) {
     state.locationId = locations[0].id;
     state.locationName = locations[0].name;
+  } else {
+    state.locationName = currentLocation.name;
   }
   els.locationSelect.value = state.locationId;
   els.sessionLocationSelect.value = state.locationId;
@@ -2294,7 +2297,12 @@ async function init() {
   await refreshCameraPermission();
   db = await openDb();
   await restoreState();
-  renderLocations([{ id: "main-bar", name: "Main Bar" }, { id: "cellar", name: "Cellar" }]);
+  renderLocations([
+    { id: "cellar", name: "Cellar" },
+    { id: "main-bar", name: "Bar" },
+    { id: "brasseries", name: "Brasseries" },
+    { id: "m-and-e", name: "M&E" }
+  ]);
   bindEvents();
   setMode(state.mode);
   renderQuantity();
