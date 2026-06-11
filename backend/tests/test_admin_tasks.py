@@ -1,4 +1,8 @@
 from datetime import datetime, timezone
+import csv
+import io
+import json
+import zipfile
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
@@ -31,7 +35,7 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=session-lifecycle-1" in response.text
+    assert "admin.js?v=catalog-portability-1" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -988,3 +992,89 @@ def test_bin_cleanup_does_not_approve_draft_and_session_archive_preserves_counts
         assert db.execute("SELECT draft_status FROM products WHERE id = 'draft-1'").fetchone()["draft_status"] == "draft"
         assert db.execute("SELECT status FROM sessions WHERE id = 's1'").fetchone()["status"] == "archived"
         assert db.execute("SELECT COUNT(*) AS c FROM stocktake_lines WHERE session_id = 's1'").fetchone()["c"] == 1
+
+
+def test_catalog_exports_are_reimportable_and_backup_includes_photos(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    database.init_db()
+    image_dir = tmp_path / "product-images"
+    image_dir.mkdir()
+    (image_dir / "gin.png").write_bytes(b"fake-png")
+    current = datetime.now(timezone.utc).isoformat()
+    with database.get_db() as db:
+        db.executemany(
+            """
+            INSERT INTO products (id, barcode, bin, name, category, size, unit, photo_url, draft_status, product_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("gin-1", "500001", "A-1", "House Gin", "Gin", "70cl", "bottle", "/product-images/gin.png", "confirmed", current),
+                ("wine-1", None, "W-1", "House Wine", "Wine", "75cl", "bottle", None, "confirmed", current),
+            ],
+        )
+        db.executemany(
+            "INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at) VALUES (?, 'gin-1', ?, ?, ?)",
+            [
+                ("500001", "Primary barcode", 1, current),
+                ("500002", "Mapped bottle barcode", 0, current),
+            ],
+        )
+        db.execute(
+            """
+            INSERT INTO barcode_mapping_audit (barcode, product_id, product_name, action, label, source, details_json, created_at)
+            VALUES ('500002', 'gin-1', 'House Gin', 'added', 'Mapped bottle barcode', 'phone_mapping', '{}', ?)
+            """,
+            (current,),
+        )
+        db.commit()
+
+    client = TestClient(app)
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+    summary = client.get("/admin/api/catalog-export/summary")
+    assert summary.json()["mapped_products"] == 1
+    assert summary.json()["unmapped_products"] == 1
+
+    mapped = client.get("/admin/api/catalog-export/products.csv?scope=mapped")
+    assert mapped.status_code == 200
+    mapped_text = mapped.content.decode("utf-8-sig")
+    rows = list(csv.DictReader(io.StringIO(mapped_text)))
+    assert [row["product_id"] for row in rows] == ["gin-1"]
+    assert {alias["barcode"] for alias in json.loads(rows[0]["barcodes_json"])} == {"500001", "500002"}
+
+    backup = client.get("/admin/api/catalog-export/backup.zip")
+    assert backup.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(backup.content)) as archive:
+        assert "catalog/mapped-products.csv" in archive.namelist()
+        assert "catalog/mapping-audit.csv" in archive.namelist()
+        assert archive.read("product-images/gin.png") == b"fake-png"
+
+    with database.get_db() as db:
+        db.execute("DELETE FROM product_barcodes")
+        db.execute("DELETE FROM products")
+        db.commit()
+    restored = client.post(
+        "/admin/api/catalog-export/restore",
+        json={"filename": "mapped-products.csv", "csv_text": mapped_text},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["restored_products"] == 1
+    assert restored.json()["restored_barcodes"] == 2
+    with database.get_db() as db:
+        assert db.execute("SELECT name FROM products WHERE id = 'gin-1'").fetchone()["name"] == "House Gin"
+        assert db.execute("SELECT COUNT(*) AS c FROM product_barcodes WHERE product_id = 'gin-1'").fetchone()["c"] == 2
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, name, unit, draft_status, product_updated_at)
+            VALUES ('conflict', '500002', 'Conflicting Product', 'each', 'confirmed', ?)
+            """,
+            (current,),
+        )
+        db.commit()
+    conflict = client.post(
+        "/admin/api/catalog-export/restore",
+        json={"filename": "mapped-products.csv", "csv_text": mapped_text},
+    )
+    assert conflict.status_code == 400
+    assert "primary barcode for product conflict" in conflict.json()["detail"]

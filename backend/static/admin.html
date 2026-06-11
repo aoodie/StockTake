@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
-    <link rel="stylesheet" href="/admin.css?v=export-workflow-1">
+    <link rel="stylesheet" href="/admin.css?v=catalog-portability-1">
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -257,6 +257,35 @@
             <div id="pwStatus" class="source-list"></div>
             <div id="pwRows" class="task-list"></div>
           </section>
+          <section class="catalog-portability">
+            <div class="catalog-portability-head">
+              <div>
+                <h3>Catalog Portability</h3>
+                <p class="section-desc">Back up product mappings before major changes, or restore them on another StockTake installation.</p>
+              </div>
+              <button id="catalogExportRefresh" class="secondary" type="button">Refresh Summary</button>
+            </div>
+            <div id="catalogExportSummary" class="catalog-export-summary"></div>
+            <div class="catalog-export-actions">
+              <a class="download-link" href="/admin/api/catalog-export/products.csv?scope=mapped">
+                <strong>Mapped Products CSV</strong><span>Re-importable products and every barcode alias</span>
+              </a>
+              <a class="download-link" href="/admin/api/catalog-export/products.csv?scope=unmapped">
+                <strong>Unmapped Products CSV</strong><span>Products still waiting for a physical barcode</span>
+              </a>
+              <a class="download-link" href="/admin/api/catalog-export/mapping-audit.csv">
+                <strong>Mapping Audit CSV</strong><span>Barcode mapping history and undo status</span>
+              </a>
+              <a class="download-link catalog-backup-link" href="/admin/api/catalog-export/backup.zip">
+                <strong>Complete Catalog Backup</strong><span>All products, mappings, audit history, manifest, and saved photos</span>
+              </a>
+            </div>
+            <div class="catalog-restore-row">
+              <input id="catalogRestoreFile" type="file" accept=".csv,text/csv">
+              <button id="catalogRestoreButton" class="secondary" type="button">Restore Catalog CSV</button>
+              <p id="catalogRestoreStatus" class="field-note">Use a mapped-products or all-products CSV exported by StockTake.</p>
+            </div>
+          </section>
           <div id="exportReview" class="export-review"></div>
         </section>
       </section>
@@ -361,6 +390,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=session-lifecycle-1" type="module"></script>
+    <script src="/admin.js?v=catalog-portability-1" type="module"></script>
   </body>
 </html>

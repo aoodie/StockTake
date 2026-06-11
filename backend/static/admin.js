@@ -81,6 +81,11 @@ const els = {
   pwDownloadLink: document.querySelector("#pwDownloadLink"),
   pwStatus: document.querySelector("#pwStatus"),
   pwRows: document.querySelector("#pwRows"),
+  catalogExportRefresh: document.querySelector("#catalogExportRefresh"),
+  catalogExportSummary: document.querySelector("#catalogExportSummary"),
+  catalogRestoreFile: document.querySelector("#catalogRestoreFile"),
+  catalogRestoreButton: document.querySelector("#catalogRestoreButton"),
+  catalogRestoreStatus: document.querySelector("#catalogRestoreStatus"),
   
   // Barcode review dialog
   taskDialog: document.querySelector("#taskDialog"),
@@ -972,6 +977,47 @@ async function loadExportReview(sessionId = els.exportSession.value) {
   await loadProcureWizardStatus(sessionId);
 }
 
+async function loadCatalogExportSummary() {
+  try {
+    const data = await api("/admin/api/catalog-export/summary");
+    els.catalogExportSummary.innerHTML = `
+      <div><span>Total products</span><strong>${escapeHtml(data.total_products)}</strong></div>
+      <div class="good"><span>Mapped</span><strong>${escapeHtml(data.mapped_products)}</strong></div>
+      <div class="${Number(data.unmapped_products) ? "warn" : "good"}"><span>Unmapped</span><strong>${escapeHtml(data.unmapped_products)}</strong></div>
+      <div><span>ProcureWizard linked</span><strong>${escapeHtml(data.procurewizard_products)}</strong></div>
+      <div class="${Number(data.draft_products) ? "warn" : "good"}"><span>Draft products</span><strong>${escapeHtml(data.draft_products)}</strong></div>
+    `;
+  } catch (err) {
+    els.catalogExportSummary.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function restoreCatalogCsv() {
+  const file = els.catalogRestoreFile.files?.[0];
+  if (!file) {
+    showToast("Choose a StockTake catalog CSV first.", "error");
+    return;
+  }
+  els.catalogRestoreButton.disabled = true;
+  els.catalogRestoreStatus.textContent = "Validating products and barcode ownership...";
+  try {
+    const csv_text = await file.text();
+    const result = await api("/admin/api/catalog-export/restore", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, csv_text })
+    });
+    els.catalogRestoreStatus.textContent = `Restored ${result.restored_products} products and ${result.restored_barcodes} barcodes.`;
+    showToast("Catalog restore completed");
+    await hydrate();
+    await loadCatalogExportSummary();
+  } catch (err) {
+    els.catalogRestoreStatus.textContent = err.message;
+    showToast(err.message, "error");
+  } finally {
+    els.catalogRestoreButton.disabled = false;
+  }
+}
+
 async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
   if (!els.pwStatus) return;
   try {
@@ -1293,7 +1339,10 @@ function bindEvents() {
         setTimeout(() => els.mappingBarcodeInput.focus(), 80);
       }
       if (button.dataset.view === "ai") loadAiSuggestions();
-      if (button.dataset.view === "export") loadExportReview();
+      if (button.dataset.view === "export") {
+        loadExportReview();
+        loadCatalogExportSummary();
+      }
     });
   });
 
@@ -1684,6 +1733,8 @@ function bindEvents() {
 
   els.exportSession.addEventListener("change", () => loadExportReview());
   els.pwImportButton.addEventListener("click", importProcureWizardCsv);
+  els.catalogExportRefresh.addEventListener("click", loadCatalogExportSummary);
+  els.catalogRestoreButton.addEventListener("click", restoreCatalogCsv);
   els.pwRows.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
     if (!button || button.dataset.action !== "link-pw-row") return;
@@ -1725,6 +1776,7 @@ async function hydrate() {
   await Promise.all([loadTasks(), loadProducts(), loadSessions(), loadMappingProducts(), loadAiSuggestions(), loadLlmSettings()]);
   if (els.exportSession.value) await loadExportReview();
   await loadProcureWizardStatus();
+  await loadCatalogExportSummary();
 }
 
 async function init() {

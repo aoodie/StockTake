@@ -98,6 +98,10 @@ class ProcureWizardImportRequest(BaseModel):
     filename: str = "procurewizard.csv"
     csv_text: str = Field(min_length=1)
 
+class CatalogRestoreRequest(BaseModel):
+    filename: str = "mapped-products.csv"
+    csv_text: str = Field(min_length=1, max_length=20_000_000)
+
 class ProcureWizardLinkRequest(BaseModel):
     product_id: str | None = None
 

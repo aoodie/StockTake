@@ -386,6 +386,74 @@ label {
   border-radius: var(--radius-md);
   background: var(--glass-bg);
 }
+.catalog-portability {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px 0;
+  border-top: 1px solid var(--glass-border);
+  border-bottom: 1px solid var(--glass-border);
+}
+.catalog-portability-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.catalog-export-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.catalog-export-summary > div {
+  padding: 12px;
+  border-left: 3px solid var(--text-muted);
+  background: rgba(255, 255, 255, 0.025);
+}
+.catalog-export-summary > div.good { border-left-color: var(--color-accent); }
+.catalog-export-summary > div.warn { border-left-color: #f59e0b; }
+.catalog-export-summary span,
+.catalog-export-summary strong {
+  display: block;
+}
+.catalog-export-summary span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.catalog-export-summary strong {
+  margin-top: 4px;
+  font-size: 24px;
+}
+.catalog-export-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.catalog-export-actions .download-link {
+  min-height: 82px;
+  align-items: flex-start;
+  flex-direction: column;
+  text-align: left;
+}
+.catalog-export-actions .download-link span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+}
+.catalog-export-actions .catalog-backup-link {
+  background: #0f766e;
+}
+.catalog-restore-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+.catalog-restore-row .field-note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
 .pw-active-file,
 .pw-export-message,
 .export-readiness {
@@ -1440,8 +1508,15 @@ dialog footer {
   .pw-link-controls,
   .pw-row-details,
   .pw-session-summary,
-  .export-downloads {
+  .export-downloads,
+  .catalog-export-summary,
+  .catalog-export-actions,
+  .catalog-restore-row {
     grid-template-columns: 1fr;
+  }
+  .catalog-portability-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .pw-active-file,
   .pw-exceptions header,

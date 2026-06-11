@@ -11,7 +11,7 @@ from ..models import (
     LoginRequest, ProductPatchRequest, ProductUpsertRequest,
     TaskPatchRequest, TaskApproveRequest, BulkProductUpdateRequest,
     BulkProductDeleteRequest, ProductBarcodeRequest, ProductMergeRequest,
-    ProcureWizardImportRequest, ProcureWizardLinkRequest, SessionStatusRequest
+    CatalogRestoreRequest, ProcureWizardImportRequest, ProcureWizardLinkRequest, SessionStatusRequest
 )
 from ..auth import (
     admin_password, create_admin_session, revoke_admin_session,
@@ -23,6 +23,13 @@ from ..services.procurewizard import (
     import_procurewizard_csv,
     import_summary,
     link_procurewizard_row,
+)
+from ..services.catalog_portability import (
+    build_catalog_backup,
+    build_catalog_csv,
+    build_mapping_audit_csv,
+    catalog_summary,
+    restore_catalog_csv,
 )
 from .sync import enrich_task_by_id, pre_export, missing_bin_rows
 
@@ -1154,6 +1161,69 @@ def admin_export_procurewizard_csv(
         media_type="text/csv; charset=windows-1252",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+@router.get("/admin/api/catalog-export/summary")
+def admin_catalog_export_summary(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        return catalog_summary(db)
+
+@router.get("/admin/api/catalog-export/products.csv")
+def admin_export_catalog_products(
+    scope: str = "mapped",
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> Response:
+    require_admin(_)
+    init_db()
+    scopes = {"mapped": True, "unmapped": False, "all": None}
+    if scope not in scopes:
+        raise HTTPException(status_code=400, detail="Catalog export scope must be mapped, unmapped, or all.")
+    with get_db() as db:
+        payload = build_catalog_csv(db, scopes[scope])
+    return Response(
+        payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{scope}-products.csv"'},
+    )
+
+@router.get("/admin/api/catalog-export/mapping-audit.csv")
+def admin_export_mapping_audit(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> Response:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        payload = build_mapping_audit_csv(db)
+    return Response(
+        payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="mapping-audit.csv"'},
+    )
+
+@router.get("/admin/api/catalog-export/backup.zip")
+def admin_export_catalog_backup(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> Response:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        payload = build_catalog_backup(db)
+    return Response(
+        payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="stocktake-catalog-backup.zip"'},
+    )
+
+@router.post("/admin/api/catalog-export/restore")
+def admin_restore_catalog(
+    request: CatalogRestoreRequest,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        try:
+            result = restore_catalog_csv(db, request.csv_text)
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"filename": request.filename, **result}
 
 @router.get("/admin/api/sessions")
 def admin_sessions(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
