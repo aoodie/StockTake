@@ -42,12 +42,14 @@ test("decoded barcode text supports native and ZXing results", () => {
   assert.equal(decodedBarcodeText({ getText: () => " 0088110552404 " }), "088110552404");
 });
 
-test("camera barcode requires two matching reads", () => {
+test("camera barcode requires three matching reads", () => {
   const first = confirmBarcodeCandidate(null, "088110552404", 1000);
   assert.equal(first.confirmed, false);
   const mismatch = confirmBarcodeCandidate(first.candidate, "3081880552404", 1100);
   assert.equal(mismatch.confirmed, false);
-  const confirmed = confirmBarcodeCandidate(mismatch.candidate, "3081880552404", 1200);
+  const second = confirmBarcodeCandidate(mismatch.candidate, "3081880552404", 1200);
+  assert.equal(second.confirmed, false);
+  const confirmed = confirmBarcodeCandidate(second.candidate, "3081880552404", 1300);
   assert.equal(confirmed.confirmed, true);
 });
 

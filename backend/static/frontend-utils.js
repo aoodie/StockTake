@@ -1,5 +1,5 @@
-export const APP_VERSION = "2026.06.11.2";
-export const CACHE_NAME = "stocktake-v32";
+export const APP_VERSION = "2026.06.11.3";
+export const CACHE_NAME = "stocktake-v33";
 export const SCAN_DEBOUNCE_MS = 700;
 export const CAMERA_DETECT_INTERVAL_MS = 90;
 export const ZXING_DETECT_INTERVAL_MS = 130;
@@ -56,11 +56,11 @@ export function decodedBarcodeText(result) {
   return canonicalizeBarcode(raw);
 }
 
-export function confirmBarcodeCandidate(previous, value, now = Date.now(), windowMs = 1500) {
+export function confirmBarcodeCandidate(previous, value, now = Date.now(), windowMs = 1500, requiredReads = 3) {
   const barcode = canonicalizeBarcode(value);
   const repeated = previous?.barcode === barcode && now - previous.at <= windowMs;
   const candidate = { barcode, count: repeated ? previous.count + 1 : 1, at: now };
-  return { candidate, confirmed: Boolean(barcode && candidate.count >= 2) };
+  return { candidate, confirmed: Boolean(barcode && candidate.count >= requiredReads) };
 }
 
 export function scannerBlockReason({
