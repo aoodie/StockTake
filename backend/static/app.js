@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-1";
+} from "./frontend-utils.js?v=scanner-recovery-2";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;

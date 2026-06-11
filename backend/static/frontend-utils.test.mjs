@@ -42,14 +42,17 @@ test("decoded barcode text supports native and ZXing results", () => {
   assert.equal(decodedBarcodeText({ getText: () => " 0088110552404 " }), "088110552404");
 });
 
-test("camera barcode requires three matching reads", () => {
+test("checksum-valid GTIN camera barcode is accepted immediately", () => {
   const first = confirmBarcodeCandidate(null, "088110552404", 1000);
+  assert.equal(first.confirmed, true);
+});
+
+test("non-GTIN camera barcode requires two matching reads", () => {
+  const first = confirmBarcodeCandidate(null, "CASE-ABC", 1000);
   assert.equal(first.confirmed, false);
-  const mismatch = confirmBarcodeCandidate(first.candidate, "3081880552404", 1100);
+  const mismatch = confirmBarcodeCandidate(first.candidate, "CASE-XYZ", 1100);
   assert.equal(mismatch.confirmed, false);
-  const second = confirmBarcodeCandidate(mismatch.candidate, "3081880552404", 1200);
-  assert.equal(second.confirmed, false);
-  const confirmed = confirmBarcodeCandidate(second.candidate, "3081880552404", 1300);
+  const confirmed = confirmBarcodeCandidate(mismatch.candidate, "CASE-XYZ", 1200);
   assert.equal(confirmed.confirmed, true);
 });
 

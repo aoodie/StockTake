@@ -1,5 +1,5 @@
-export const APP_VERSION = "2026.06.11.5";
-export const CACHE_NAME = "stocktake-v35";
+export const APP_VERSION = "2026.06.11.6";
+export const CACHE_NAME = "stocktake-v36";
 export const SCAN_DEBOUNCE_MS = 700;
 export const CAMERA_DETECT_INTERVAL_MS = 90;
 export const ZXING_DETECT_INTERVAL_MS = 130;
@@ -9,7 +9,9 @@ export const BARCODE_FORMATS = [
   "ean_8",
   "ean_13",
   "upc_a",
-  "upc_e"
+  "upc_e",
+  "itf",
+  "code_39"
 ];
 
 export const ZXING_FAST_FORMATS = [
@@ -17,6 +19,8 @@ export const ZXING_FAST_FORMATS = [
   "EAN_8",
   "UPC_A",
   "UPC_E",
+  "ITF",
+  "CODE_39",
   "CODE_128"
 ];
 
@@ -56,8 +60,11 @@ export function decodedBarcodeText(result) {
   return canonicalizeBarcode(raw);
 }
 
-export function confirmBarcodeCandidate(previous, value, now = Date.now(), windowMs = 1500, requiredReads = 3) {
+export function confirmBarcodeCandidate(previous, value, now = Date.now(), windowMs = 3000, requiredReads = 2) {
   const barcode = canonicalizeBarcode(value);
+  if (barcode && isValidGtin(barcode)) {
+    return { candidate: { barcode, count: requiredReads, at: now }, confirmed: true };
+  }
   const repeated = previous?.barcode === barcode && now - previous.at <= windowMs;
   const candidate = { barcode, count: repeated ? previous.count + 1 : 1, at: now };
   return { candidate, confirmed: Boolean(barcode && candidate.count >= requiredReads) };
