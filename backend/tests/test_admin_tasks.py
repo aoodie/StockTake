@@ -1041,7 +1041,36 @@ def test_catalog_exports_are_reimportable_and_backup_includes_photos(tmp_path, m
     mapped_text = mapped.content.decode("utf-8-sig")
     rows = list(csv.DictReader(io.StringIO(mapped_text)))
     assert [row["product_id"] for row in rows] == ["gin-1"]
+    assert rows[0]["primary_barcode"] == "500001"
     assert {alias["barcode"] for alias in json.loads(rows[0]["barcodes_json"])} == {"500001", "500002"}
+
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, bin, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('procurewizard-12345', '12345', '12345', 'Imported Wine', 'Wine', '6 x 75cl', 'case', 'confirmed', ?)
+            """,
+            (current,),
+        )
+        db.executemany(
+            """
+            INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
+            VALUES (?, 'procurewizard-12345', ?, ?, ?)
+            """,
+            [
+                ("12345", "ProcureWizard PID", 1, current),
+                ("5012345678900", "Mapped barcode", 0, current),
+            ],
+        )
+        db.commit()
+    mapped = client.get("/admin/api/catalog-export/products.csv?scope=mapped")
+    rows_by_id = {
+        row["product_id"]: row
+        for row in csv.DictReader(io.StringIO(mapped.content.decode("utf-8-sig")))
+    }
+    pw_row = rows_by_id["procurewizard-12345"]
+    assert pw_row["primary_barcode"] == "5012345678900"
+    assert {alias["barcode"] for alias in json.loads(pw_row["barcodes_json"])} == {"5012345678900"}
 
     backup = client.get("/admin/api/catalog-export/backup.zip")
     assert backup.status_code == 200

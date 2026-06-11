@@ -43,6 +43,8 @@ MAPPING_AUDIT_COLUMNS = [
     "undone_at",
 ]
 
+PROCUREWIZARD_PID_LABEL = "ProcureWizard PID"
+
 
 def catalog_summary(db: sqlite3.Connection) -> dict[str, int]:
     row = db.execute(
@@ -52,11 +54,11 @@ def catalog_summary(db: sqlite3.Connection) -> dict[str, int]:
           SUM(CASE WHEN draft_status = 'draft' THEN 1 ELSE 0 END) AS draft_products,
           SUM(CASE WHEN EXISTS (
             SELECT 1 FROM product_barcodes pb
-            WHERE pb.product_id = products.id AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            WHERE pb.product_id = products.id AND COALESCE(pb.label, '') != ?
           ) THEN 1 ELSE 0 END) AS mapped_products,
           SUM(CASE WHEN NOT EXISTS (
             SELECT 1 FROM product_barcodes pb
-            WHERE pb.product_id = products.id AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            WHERE pb.product_id = products.id AND COALESCE(pb.label, '') != ?
           ) THEN 1 ELSE 0 END) AS unmapped_products,
           SUM(CASE WHEN EXISTS (
             SELECT 1 FROM procurewizard_rows pwr
@@ -64,7 +66,8 @@ def catalog_summary(db: sqlite3.Connection) -> dict[str, int]:
             WHERE pwr.product_id = products.id
           ) THEN 1 ELSE 0 END) AS procurewizard_products
         FROM products
-        """
+        """,
+        (PROCUREWIZARD_PID_LABEL, PROCUREWIZARD_PID_LABEL),
     ).fetchone()
     return {key: int(row[key] or 0) for key in row.keys()}
 
@@ -76,7 +79,7 @@ def _catalog_rows(db: sqlite3.Connection, mapped: bool | None = None) -> list[li
         where = f"""
           WHERE {qualifier} (
             SELECT 1 FROM product_barcodes pb
-            WHERE pb.product_id = p.id AND COALESCE(pb.label, '') != 'ProcureWizard PID'
+            WHERE pb.product_id = p.id AND COALESCE(pb.label, '') != '{PROCUREWIZARD_PID_LABEL}'
           )
         """
     products = db.execute(
@@ -95,12 +98,20 @@ def _catalog_rows(db: sqlite3.Connection, mapped: bool | None = None) -> list[li
                 """
                 SELECT barcode, label, is_primary, created_at
                 FROM product_barcodes
-                WHERE product_id = ?
+                WHERE product_id = ? AND COALESCE(label, '') != ?
                 ORDER BY is_primary DESC, barcode
                 """,
-                (product["id"],),
+                (product["id"], PROCUREWIZARD_PID_LABEL),
             ).fetchall()
         ]
+        primary_barcode = next(
+            (
+                alias["barcode"]
+                for alias in aliases
+                if alias["is_primary"] and alias["barcode"] == product["barcode"]
+            ),
+            aliases[0]["barcode"] if aliases else "",
+        )
         pw = db.execute(
             """
             SELECT pwr.pid, pwr.bin_number, pwr.pack_size
@@ -116,7 +127,7 @@ def _catalog_rows(db: sqlite3.Connection, mapped: bool | None = None) -> list[li
             [
                 "1",
                 product["id"],
-                product["barcode"] or "",
+                primary_barcode,
                 product["name"] or "",
                 product["bin"] or "",
                 product["category"] or "",
