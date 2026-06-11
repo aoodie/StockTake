@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Cookie, HTTPException
 
 from ..auth import ADMIN_COOKIE, require_admin
-from ..database import get_db, get_setting, init_db, normalize_identifier, now_iso, set_setting
+from ..database import get_db, init_db, normalize_identifier, now_iso, set_setting
 from ..models import (
     AiSuggestionApplyRequest,
     AiSuggestionGenerateRequest,
@@ -20,6 +20,7 @@ from ..services.enrichment import (
     clear_openai_api_key,
     fetch_product_suggestion,
     openai_key_status,
+    openai_model,
     save_openai_api_key,
     test_openai_connection,
 )
@@ -27,7 +28,6 @@ from .admin import audit_product_change, product_issue_rows, product_snapshot, t
 
 router = APIRouter()
 
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 OPENAI_MODEL_SETTING = "openai_model"
 
 
@@ -199,8 +199,8 @@ def save_ai_suggestion(
 def admin_llm_settings(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
     require_admin(_)
     init_db()
-    configured_default = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    model = get_setting(OPENAI_MODEL_SETTING, configured_default)
+    configured_default = os.getenv("OPENAI_MODEL", "gpt-4.1")
+    model = openai_model()
     return {
         "openai_model": model,
         "env_default": configured_default,

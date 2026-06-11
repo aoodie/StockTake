@@ -77,7 +77,7 @@ Set these environment variables in production:
 - `ADMIN_PASSWORD`: admin login password. If unset, a random password is generated in `backend/data/admin_password.txt`.
 - `ADMIN_SECRET`: cookie signing secret. Defaults to the admin password.
 - `OPENAI_API_KEY`: optional; enables cited web-search fallback and LLM cleanup when the structured barcode databases have no match.
-- `OPENAI_MODEL`: optional model override for enrichment. Defaults to `gpt-4.1-mini`.
+- `OPENAI_MODEL`: optional model override for enrichment. Defaults to `gpt-4.1`.
 
 Approved product photos are saved under `backend/data/product-images`, with the product record storing the served image URL and source metadata.
 

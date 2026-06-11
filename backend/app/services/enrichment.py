@@ -11,7 +11,7 @@ import httpx
 from ..database import DATA_DIR, get_db, get_setting, now_iso
 
 IMAGE_DIR = Path(__file__).resolve().parents[2] / "data" / "product-images"
-DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
 OPENAI_API_KEY_FILE = DATA_DIR / "openai_api_key.txt"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 LOOKUP_CACHE_VERSION = 3
