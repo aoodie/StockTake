@@ -536,7 +536,7 @@ def scanner_lookup_product(barcode: str) -> dict:
     with get_db() as db:
         owner = db.execute(
             f"""
-            SELECT p.id, p.barcode, p.bin, p.name, p.category, p.size, p.unit, p.photo_url,
+            SELECT p.id, p.barcode, pb.barcode AS matched_barcode, p.bin, p.name, p.category, p.size, p.unit, p.photo_url,
                    p.notes, p.draft_status, p.product_updated_at
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
@@ -546,7 +546,10 @@ def scanner_lookup_product(barcode: str) -> dict:
             codes,
         ).fetchone()
         if owner and owner["draft_status"] != "draft":
-            return {"barcode": barcode, "exists": True, "product": dict(owner), "suggested": {}}
+            product = dict(owner)
+            product["catalog_barcode"] = product["barcode"]
+            product["barcode"] = barcode
+            return {"barcode": barcode, "exists": True, "product": product, "suggested": {}}
     suggestion = fetch_product_suggestion(barcode)
     with get_db() as db:
         pw_matches = active_procurewizard_matches(

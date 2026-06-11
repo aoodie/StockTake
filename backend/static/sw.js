@@ -1,12 +1,12 @@
-const CACHE_NAME = "stocktake-v30";
+const CACHE_NAME = "stocktake-v31";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/mapping.html",
   "/styles.css?v=qty-keypad-1",
-  "/app.js?v=go-live-reset-1",
+  "/app.js?v=exact-scan-barcode-1",
   "/mapping.js?v=search-clear-1",
-  "/frontend-utils.js?v=qty-keypad-1",
+  "/frontend-utils.js?v=exact-scan-barcode-1",
   "/frontend-utils.js?v=phone-mapping-4",
   "/manifest.webmanifest",
   "/vendor/zxing-library.min.js?v=typed-pw-suggest-1"

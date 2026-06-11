@@ -13,7 +13,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=qty-keypad-1";
+} from "./frontend-utils.js?v=exact-scan-barcode-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -573,12 +573,24 @@ async function getProduct(barcode) {
   const normalized = normalizeBarcode(barcode);
   for (const key of barcodeLookupKeys(normalized)) {
     const indexed = productIndex.get(key);
-    if (indexed) return indexed;
+    if (indexed) {
+      return {
+        ...indexed,
+        barcode: normalized,
+        barcode_raw: indexed.barcode_raw || indexed.barcode,
+        catalog_barcode: indexed.catalog_barcode || indexed.barcode_raw || indexed.barcode
+      };
+    }
   }
   const found = await get("products", normalized);
   if (found) {
     indexProduct(found);
-    return found;
+    return {
+      ...found,
+      barcode: normalized,
+      barcode_raw: found.barcode_raw || found.barcode,
+      catalog_barcode: found.catalog_barcode || found.barcode_raw || found.barcode
+    };
   }
   const draft = normalProduct({
     id: `draft-${normalized}`,
@@ -890,7 +902,7 @@ async function commitScanQuantity(product, quantity, { mergeDuplicate = false, r
     }
   }
   await addLine(product, quantity);
-  return currentCount(product.barcode);
+  return currentProductCount(product);
 }
 
 async function handleScan(barcode, options = {}) {
@@ -943,7 +955,7 @@ async function handleScan(barcode, options = {}) {
     state.caseType = defaultCaseType(product);
     renderProduct(product);
     renderQuantity();
-    const total = await currentCount(product.barcode);
+    const total = await currentProductCount(product);
     showScanHud(product, state.quantity, total);
     if (product.draft_status === "draft") {
       state.pendingUnknownProduct = product;
@@ -1191,7 +1203,7 @@ async function confirmQuantity() {
   } else {
     await addLine(product, quantity);
   }
-  const count = await currentCount(product.barcode);
+  const count = await currentProductCount(product);
   pulse(`Saved\nCurrent count: ${count}`);
   flashFeedback("success");
   closeScanHud();

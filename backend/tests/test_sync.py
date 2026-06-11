@@ -339,6 +339,39 @@ def test_scanner_lookup_returns_enrichment_for_unknown_barcode(tmp_path, monkeyp
     assert response.json()["suggested"]["name"] == "Suggested Bottle"
 
 
+def test_scanner_lookup_preserves_exact_scanned_alias(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO products
+                (id, barcode, bin, name, category, size, unit, draft_status, product_updated_at)
+            VALUES ('procurewizard-100', '100', 'B-10', 'Mapped Wine', 'Wine', '75cl', 'case', 'confirmed', '2026-06-11')
+            """
+        )
+        db.executemany(
+            """
+            INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
+            VALUES (?, 'procurewizard-100', ?, ?, '2026-06-11')
+            """,
+            [
+                ("100", "ProcureWizard PID", 1),
+                ("05012345678900", "Mapped barcode", 0),
+            ],
+        )
+        db.commit()
+
+    response = TestClient(app).get("/products/lookup/05012345678900")
+
+    assert response.status_code == 200
+    product = response.json()["product"]
+    assert product["barcode"] == "05012345678900"
+    assert product["matched_barcode"] == "05012345678900"
+    assert product["catalog_barcode"] == "100"
+
+
 def test_scanner_lookup_returns_procurewizard_matches(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
