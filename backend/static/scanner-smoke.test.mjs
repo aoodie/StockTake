@@ -87,3 +87,10 @@ test("phone outlet fallback includes the operational outlet list", () => {
   assert.match(appSource, /\{ id: "m-and-e", name: "M&E" \}/);
   assert.match(appSource, /state\.locationName = currentLocation\.name/);
 });
+
+test("go-live data epoch clears old phone queues before sync", () => {
+  assert.match(appSource, /async function applyDataEpoch/);
+  assert.match(appSource, /\["products", "lines", "events", "audit", "state"\]/);
+  assert.match(appSource, /if \(!\(await syncCatalog\(\)\)\) return/);
+  assert.match(appSource, /if \(await syncCatalog\(\)\) syncEvents\(\)/);
+});

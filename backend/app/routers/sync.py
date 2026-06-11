@@ -1,11 +1,12 @@
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response
 from ..database import (
-    get_db, now_iso, normalize_identifier, init_db, 
-    ensure_default_rows, product_select_sql
+    get_db, now_iso, normalize_identifier, init_db,
+    ensure_default_rows, get_setting, product_select_sql
 )
 from ..models import (
     SyncRequest, ProductUpsertRequest, SessionCreateRequest, 
@@ -378,6 +379,19 @@ def validate_counting_session(db: sqlite3.Connection, event: SyncEvent) -> None:
     if session["status"] not in {"open", "counting"}:
         raise ValueError(f"Session is {session['status']} and cannot accept counts")
 
+def validate_event_epoch(db: sqlite3.Connection, event: SyncEvent) -> None:
+    row = db.execute("SELECT value FROM app_settings WHERE key = 'accept_events_after'").fetchone()
+    if not row or not row["value"]:
+        return
+    cutoff = datetime.fromisoformat(row["value"].replace("Z", "+00:00"))
+    created_at = event.created_at
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=timezone.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if created_at < cutoff:
+        raise ValueError("Event predates the go-live reset and was discarded")
+
 @router.post("/sync/events")
 def sync_events(
     request: SyncRequest,
@@ -411,6 +425,7 @@ def sync_events(
             server_id = f"srv_{event.local_id}"
             db.execute("SAVEPOINT sync_event")
             try:
+                validate_event_epoch(db, event)
                 validate_counting_session(db, event)
                 task_ids.extend(apply_event(db, event, server_id))
                 db.execute(
@@ -504,6 +519,7 @@ def catalog() -> dict:
         ).fetchall()
     return {
         "catalog_version": now_iso(),
+        "data_epoch": get_setting("data_epoch", "initial"),
         "products": product_payload,
         "locations": [dict(row) for row in locations],
         "sessions": [dict(row) for row in sessions],

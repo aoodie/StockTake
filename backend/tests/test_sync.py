@@ -30,6 +30,37 @@ def test_catalog_has_operational_outlets_and_renames_main_bar_safely(tmp_path, m
         {"id": "m-and-e", "name": "M&E"},
     ]
 
+def test_sync_rejects_offline_events_from_before_go_live_reset(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    open_session()
+    with database.get_db() as db:
+        db.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('accept_events_after', '2026-06-11T09:00:00+00:00', '2026-06-11T09:00:00+00:00')"
+        )
+        db.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('data_epoch', 'go-live-2026-06-11', '2026-06-11T09:00:00+00:00')"
+        )
+        db.commit()
+    event = {
+        "local_id": "old-offline-scan",
+        "device_id": "device-a",
+        "session_id": "session-a",
+        "location_id": "main-bar",
+        "event_type": "scan",
+        "payload": {"line_id": "old-line", "barcode": "123", "quantity_decimal": "1", "product": {"id": "p1", "barcode": "123", "name": "Old test product"}},
+        "created_at": "2026-06-10T09:00:00+00:00",
+        "idempotency_key": "device-a:old-offline-scan",
+    }
+
+    client = TestClient(app)
+    response = client.post("/sync/events", json={"events": [event]})
+
+    assert response.json()["events"][0]["status"] == "rejected"
+    assert "go-live reset" in response.json()["events"][0]["error"]
+    assert client.get("/catalog").json()["data_epoch"] == "go-live-2026-06-11"
+
 def test_sync_idempotency_ignores_duplicate_events(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")

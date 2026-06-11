@@ -305,6 +305,28 @@ function all(store) {
   });
 }
 
+function clearStore(store) {
+  return new Promise((resolve, reject) => {
+    const request = tx(store, "readwrite").clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function applyDataEpoch(dataEpoch) {
+  const catalogMeta = await get("meta", "catalog");
+  if (catalogMeta?.data_epoch === dataEpoch) return true;
+  for (const store of ["products", "lines", "events", "audit", "state"]) {
+    await clearStore(store);
+  }
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith(SESSION_MEMORY_PREFIX)) localStorage.removeItem(key);
+  }
+  await put("meta", { key: "catalog", data_epoch: dataEpoch });
+  location.reload();
+  return false;
+}
+
 async function saveState() {
   const persistent = {
     key: "active",
@@ -357,6 +379,7 @@ async function syncCatalog() {
     const response = await fetch("/catalog");
     if (!response.ok) throw new Error("Catalog failed");
     const catalog = await response.json();
+    if (!(await applyDataEpoch(catalog.data_epoch || "initial"))) return false;
     productIndex.clear();
     catalogProducts = catalog.products.map(normalProduct);
     for (const product of catalogProducts) {
@@ -370,11 +393,14 @@ async function syncCatalog() {
     await put("meta", {
       key: "catalog",
       catalog_version: catalog.catalog_version,
+      data_epoch: catalog.data_epoch || "initial",
       last_catalog_sync_at: state.lastCatalogSyncAt
     });
     setSyncStatus("Catalog synced");
+    return true;
   } catch {
     setSyncStatus("Offline catalog");
+    return false;
   }
 }
 
@@ -2276,9 +2302,8 @@ function bindEvents() {
     await syncCatalog();
     await showExportReview();
   });
-  window.addEventListener("online", () => {
-    syncCatalog();
-    syncEvents();
+  window.addEventListener("online", async () => {
+    if (await syncCatalog()) syncEvents();
   });
   document.addEventListener("visibilitychange", () => {
     updateDiagnostics({ visibility: document.visibilityState });
@@ -2307,7 +2332,7 @@ async function init() {
   setMode(state.mode);
   renderQuantity();
   await loadProductIndex();
-  await syncCatalog();
+  if (!(await syncCatalog())) return;
   await showSessionDialog(false);
   renderSessionHeader();
   await renderLines();
