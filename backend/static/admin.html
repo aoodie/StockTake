@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
-    <link rel="stylesheet" href="/admin.css?v=catalog-portability-1">
+    <link rel="stylesheet" href="/admin.css?v=outlet-pw-1">
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -250,6 +250,15 @@
               <p class="section-desc">Upload the stocktake template, link products, then export the same CSV format.</p>
             </div>
             <div class="pw-import-row">
+              <label>
+                Outlet
+                <select id="pwOutlet">
+                  <option value="cellar">Cellar</option>
+                  <option value="main-bar">Bar</option>
+                  <option value="brasseries">Brasseries</option>
+                  <option value="m-and-e">M&amp;E</option>
+                </select>
+              </label>
               <input id="pwCsvFile" type="file" accept=".csv,text/csv">
               <button id="pwImportButton" class="secondary" type="button">Import CSV</button>
               <a id="pwDownloadLink" class="download-link disabled" href="#">Download ProcureWizard CSV</a>
@@ -390,6 +399,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=catalog-portability-1" type="module"></script>
+    <script src="/admin.js?v=outlet-pw-1" type="module"></script>
   </body>
 </html>

@@ -76,6 +76,7 @@ const els = {
   sessionList: document.querySelector("#sessionList"),
   exportSession: document.querySelector("#exportSession"),
   exportReview: document.querySelector("#exportReview"),
+  pwOutlet: document.querySelector("#pwOutlet"),
   pwCsvFile: document.querySelector("#pwCsvFile"),
   pwImportButton: document.querySelector("#pwImportButton"),
   pwDownloadLink: document.querySelector("#pwDownloadLink"),
@@ -1031,12 +1032,13 @@ async function restoreCatalogCsv() {
 
 async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
   if (!els.pwStatus) return;
+  const outletId = els.pwOutlet?.value || "cellar";
   try {
-    const data = await api(`/admin/api/procurewizard/status?session_id=${encodeURIComponent(sessionId || "")}`);
+    const data = await api(`/admin/api/procurewizard/status?session_id=${encodeURIComponent(sessionId || "")}&outlet_id=${encodeURIComponent(outletId)}`);
     state.procurewizard = data;
     const active = data.active;
     if (!active) {
-      els.pwStatus.innerHTML = `<p class="meta">No ProcureWizard CSV imported yet.</p>`;
+      els.pwStatus.innerHTML = `<p class="meta">No ProcureWizard CSV imported for ${escapeHtml(els.pwOutlet?.selectedOptions?.[0]?.textContent || outletId)} yet.</p>`;
       els.pwRows.innerHTML = "";
       els.pwDownloadLink.classList.add("disabled");
       els.pwDownloadLink.href = "#";
@@ -1048,7 +1050,7 @@ async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
     const hasPwCounts = Number(session.pw_product_count || 0) > 0;
     els.pwStatus.innerHTML = `
       <div class="pw-active-file">
-        <div><span>Active template</span><strong>${escapeHtml(active.filename)}</strong></div>
+        <div><span>Active ${escapeHtml(els.pwOutlet?.selectedOptions?.[0]?.textContent || outletId)} template</span><strong>${escapeHtml(active.filename)}</strong></div>
         <span>${escapeHtml(active.row_count)} rows · ${escapeHtml(counts.manual || 0)} manual links</span>
       </div>
       <div class="pw-session-summary">
@@ -1062,7 +1064,7 @@ async function loadProcureWizardStatus(sessionId = els.exportSession.value) {
       </div>
     `;
     if (sessionId && hasPwCounts) {
-      els.pwDownloadLink.href = `/admin/api/procurewizard/export/${encodeURIComponent(sessionId)}`;
+      els.pwDownloadLink.href = `/admin/api/procurewizard/export/${encodeURIComponent(sessionId)}?outlet_id=${encodeURIComponent(outletId)}`;
       els.pwDownloadLink.classList.remove("disabled");
     } else {
       els.pwDownloadLink.href = "#";
@@ -1127,9 +1129,9 @@ async function importProcureWizardCsv() {
     const csv_text = new TextDecoder("windows-1252").decode(buffer);
     const result = await api("/admin/api/procurewizard/import", {
       method: "POST",
-      body: JSON.stringify({ filename: file.name, csv_text })
+      body: JSON.stringify({ filename: file.name, csv_text, outlet_id: els.pwOutlet?.value || "cellar" })
     });
-    showToast(`Imported ${result.row_count} ProcureWizard rows`);
+    showToast(`Imported ${result.row_count} ProcureWizard rows for ${els.pwOutlet?.selectedOptions?.[0]?.textContent || result.outlet_id}`);
     await hydrate();
   } catch (err) {
     showToast(err.message, "error");
@@ -1755,6 +1757,7 @@ function bindEvents() {
 
   els.exportSession.addEventListener("change", () => loadExportReview());
   els.pwImportButton.addEventListener("click", importProcureWizardCsv);
+  els.pwOutlet?.addEventListener("change", () => loadProcureWizardStatus());
   els.catalogExportRefresh.addEventListener("click", loadCatalogExportSummary);
   els.catalogRestoreButton.addEventListener("click", restoreCatalogCsv);
   els.pwRows.addEventListener("click", async (event) => {

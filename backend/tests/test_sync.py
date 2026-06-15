@@ -452,6 +452,13 @@ def test_typed_description_returns_procurewizard_suggestions(tmp_path, monkeypat
     assert response.json()["matches"][0]["product"]["id"] == "procurewizard-200"
     assert all("Monkey" in match["description"] for match in response.json()["matches"])
 
+    other_outlet = client.get(
+        "/products/matches",
+        params={"name": "Monkey 47", "location_id": "main-bar"},
+    )
+    assert other_outlet.status_code == 200
+    assert other_outlet.json()["matches"] == []
+
 
 def test_raw_scanned_export_includes_unmapped_draft_without_admin(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)

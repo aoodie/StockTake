@@ -513,7 +513,7 @@ def catalog() -> dict:
     }
 
 @router.get("/products/lookup/{barcode}")
-def scanner_lookup_product(barcode: str) -> dict:
+def scanner_lookup_product(barcode: str, location_id: str = "cellar") -> dict:
     init_db()
     barcode = canonicalize_barcode(barcode)
     if not barcode:
@@ -548,6 +548,7 @@ def scanner_lookup_product(barcode: str) -> dict:
                 "category": suggestion.get("category"),
                 "size": suggestion.get("size"),
             },
+            outlet_id=location_id,
         )
     return {"barcode": barcode, "exists": False, "suggested": suggestion, "procurewizard_matches": pw_matches}
 
@@ -557,6 +558,7 @@ def scanner_product_matches(
     category: str = "",
     size: str = "",
     limit: int = 5,
+    location_id: str = "cellar",
 ) -> dict:
     name = normalize_identifier(name)
     if len(name) < 3:
@@ -568,6 +570,7 @@ def scanner_product_matches(
             limit=limit,
             min_score=0.28,
             require_name_tokens=True,
+            outlet_id=location_id,
         )
     return {"matches": matches}
 

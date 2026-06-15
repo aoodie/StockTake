@@ -286,6 +286,7 @@ def init_db(force: bool = False) -> None:
         add_column_if_missing(db, "sessions", "updated_at", "TEXT")
         add_column_if_missing(db, "sessions", "exported_at", "TEXT")
         add_column_if_missing(db, "stocktake_lines", "case_type", "TEXT NOT NULL DEFAULT 'split'")
+        add_column_if_missing(db, "procurewizard_imports", "outlet_id", "TEXT NOT NULL DEFAULT 'cellar'")
         db.execute(
             """
             INSERT OR IGNORE INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
@@ -348,6 +349,9 @@ def init_db(force: bool = False) -> None:
             ON procurewizard_rows(product_id);
             CREATE INDEX IF NOT EXISTS idx_procurewizard_rows_status
             ON procurewizard_rows(import_id, match_status, match_score DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_imports_active_outlet
+            ON procurewizard_imports(outlet_id)
+            WHERE active = 1;
             """
         )
         db.commit()

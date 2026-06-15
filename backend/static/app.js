@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-2";
+} from "./frontend-utils.js?v=outlet-pw-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -841,7 +841,7 @@ async function chooseExistingProductForUnknown(index) {
 async function enrichUnknownProduct(product) {
   const generation = ++state.lookupGeneration;
   try {
-    const response = await fetch(`/products/lookup/${encodeURIComponent(product.barcode)}`);
+    const response = await fetch(`/products/lookup/${encodeURIComponent(product.barcode)}?location_id=${encodeURIComponent(state.locationId)}`);
     if (!response.ok) throw new Error("Lookup failed");
     const result = await response.json();
     if (generation !== state.lookupGeneration || state.currentProduct?.barcode !== product.barcode) return;
@@ -1346,7 +1346,7 @@ async function suggestUnknownDescription() {
   }
   suggestUnknownDescription.timer = setTimeout(async () => {
     try {
-      const response = await fetch(`/products/matches?name=${encodeURIComponent(query)}&limit=5`);
+      const response = await fetch(`/products/matches?name=${encodeURIComponent(query)}&limit=5&location_id=${encodeURIComponent(state.locationId)}`);
       if (!response.ok) throw new Error("Match lookup failed");
       const result = await response.json();
       state.unknownSuggestionMatches = result.matches || [];

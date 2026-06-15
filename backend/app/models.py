@@ -98,6 +98,7 @@ class ProductMergeRequest(BaseModel):
 class ProcureWizardImportRequest(BaseModel):
     filename: str = "procurewizard.csv"
     csv_text: str = Field(min_length=1)
+    outlet_id: str = Field(default="cellar", min_length=1, max_length=80)
 
 class CatalogRestoreRequest(BaseModel):
     filename: str = "mapped-products.csv"

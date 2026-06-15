@@ -96,7 +96,7 @@ def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tm
         filename, payload = build_procurewizard_csv(db, "session-pw")
 
     exported = payload.decode("cp1252")
-    assert filename == "procurewizard-session-pw.csv"
+    assert filename == "procurewizard-cellar-session-pw.csv"
     assert "21041,928291,<-- Do not delete or edit" in exported
     assert "3862551,3862551,0,Bourbon / American Whiskey,Jack Daniels Rye,1 x 70 cl [1],0,0,,11.5" in exported
     assert "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6],0,0,," in exported
@@ -231,3 +231,64 @@ def test_procurewizard_export_rejects_session_without_linked_counts(tmp_path, mo
             assert "no ProcureWizard-linked counted products" in str(exc)
         else:
             raise AssertionError("Expected ProcureWizard export to reject an unchanged template")
+
+
+def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+    bar_csv = sample_csv().replace(
+        "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6]",
+        "777777,777777,22,Gin,Bar Exclusive Gin,6 x 70 cl [6]",
+    )
+
+    with database.get_db() as db:
+        cellar = import_procurewizard_csv(db, "cellar.csv", sample_csv(), "cellar")
+        db.execute(
+            """
+            INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
+            VALUES ('5010327001234', 'procurewizard-3862551', 'Mapped barcode', 0, ?)
+            """,
+            (now,),
+        )
+        bar = import_procurewizard_csv(db, "bar.csv", bar_csv, "main-bar")
+        db.executemany(
+            """
+            INSERT INTO stocktake_lines (
+                id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                product_name_snapshot, quantity_decimal, case_type, draft_status, counted_at, device_id, notes
+            ) VALUES (?, 'session-outlets', ?, ?, ?, '', ?, ?, 'split', 'confirmed', ?, 'device-a', '')
+            """,
+            [
+                ("cellar-line", "cellar", "procurewizard-3862551", "5010327001234", "Jack Daniels Rye", "4", now),
+                ("bar-line", "main-bar", "procurewizard-777777", "777777", "Bar Exclusive Gin", "7", now),
+            ],
+        )
+        db.commit()
+
+        active = db.execute(
+            "SELECT outlet_id, filename FROM procurewizard_imports WHERE active = 1 ORDER BY outlet_id"
+        ).fetchall()
+        alias = db.execute(
+            "SELECT product_id, label FROM product_barcodes WHERE barcode = '5010327001234'"
+        ).fetchone()
+        cellar_summary = import_summary(db, "session-outlets", "cellar")
+        bar_summary = import_summary(db, "session-outlets", "main-bar")
+        cellar_filename, cellar_payload = build_procurewizard_csv(db, "session-outlets", "cellar")
+        bar_filename, bar_payload = build_procurewizard_csv(db, "session-outlets", "main-bar")
+
+    assert cellar["outlet_id"] == "cellar"
+    assert bar["outlet_id"] == "main-bar"
+    assert [(row["outlet_id"], row["filename"]) for row in active] == [
+        ("cellar", "cellar.csv"),
+        ("main-bar", "bar.csv"),
+    ]
+    assert alias["product_id"] == "procurewizard-3862551"
+    assert alias["label"] == "Mapped barcode"
+    assert cellar_summary["session"]["pw_quantity_total"] == "4"
+    assert bar_summary["session"]["pw_quantity_total"] == "7"
+    assert cellar_filename == "procurewizard-cellar-session-outlets.csv"
+    assert bar_filename == "procurewizard-main-bar-session-outlets.csv"
+    assert "Jack Daniels Rye,1 x 70 cl [1],0,0,,4" in cellar_payload.decode("cp1252")
+    assert "Bar Exclusive Gin,6 x 70 cl [6],0,0,,7" in bar_payload.decode("cp1252")

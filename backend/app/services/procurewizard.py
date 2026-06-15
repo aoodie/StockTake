@@ -164,17 +164,22 @@ def active_procurewizard_matches(
     limit: int = 5,
     min_score: float = 0.38,
     require_name_tokens: bool = False,
+    outlet_id: str = "cellar",
 ) -> list[dict[str, Any]]:
+    outlet_id = normalize_outlet_id(outlet_id)
     rows = db.execute(
         """
         SELECT pwr.id AS row_id, pwr.pid, pwr.bin_number, pwr.pos, pwr.category,
                pwr.description, pwr.pack_size, pwr.product_id,
+               pwi.outlet_id,
                p.id, p.barcode, p.bin, p.name, p.category AS product_category,
                p.size, p.unit, p.photo_url, p.notes, p.draft_status, p.product_updated_at
         FROM procurewizard_rows pwr
         JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
         LEFT JOIN products p ON p.id = pwr.product_id
-        """
+        WHERE pwi.outlet_id = ?
+        """,
+        (outlet_id,),
     ).fetchall()
     matches: list[dict[str, Any]] = []
     product_name_tokens = set(normalize_match_text(product.get("name") or "").split())
@@ -188,6 +193,7 @@ def active_procurewizard_matches(
             {
                 "description": row["description"],
                 "pack_size": row["pack_size"],
+                "outlet_id": row["outlet_id"],
                 "category": row["category"],
             },
             product,
@@ -263,17 +269,27 @@ def ensure_procurewizard_product(db: Connection, row: dict[str, str], current: s
     return product_id
 
 
-def import_procurewizard_csv(db: Connection, filename: str, csv_text: str) -> dict[str, Any]:
+def normalize_outlet_id(outlet_id: str) -> str:
+    return normalize_identifier(outlet_id) or "cellar"
+
+
+def import_procurewizard_csv(
+    db: Connection,
+    filename: str,
+    csv_text: str,
+    outlet_id: str = "cellar",
+) -> dict[str, Any]:
     parsed = parse_procurewizard_csv_text(csv_text)
     current = now_iso()
-    import_id = f"pw-{re.sub(r'[^0-9]', '', current)[:20]}"
-    db.execute("UPDATE procurewizard_imports SET active = 0")
+    outlet_id = normalize_outlet_id(outlet_id)
+    import_id = f"pw-{outlet_id}-{re.sub(r'[^0-9]', '', current)[:20]}"
+    db.execute("UPDATE procurewizard_imports SET active = 0 WHERE outlet_id = ?", (outlet_id,))
     db.execute(
         """
         INSERT INTO procurewizard_imports (
-            id, filename, encoding, metadata_json, header_json, row_count, active, created_at
+            id, filename, encoding, metadata_json, header_json, row_count, active, created_at, outlet_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
         """,
         (
             import_id,
@@ -283,6 +299,7 @@ def import_procurewizard_csv(db: Connection, filename: str, csv_text: str) -> di
             json.dumps(parsed.header, separators=(",", ":")),
             len(parsed.rows),
             current,
+            outlet_id,
         ),
     )
     matched = 0
@@ -337,6 +354,7 @@ def import_procurewizard_csv(db: Connection, filename: str, csv_text: str) -> di
     return {
         "import_id": import_id,
         "filename": filename,
+        "outlet_id": outlet_id,
         "row_count": len(parsed.rows),
         "matched_count": matched,
         "imported_count": imported,
@@ -344,17 +362,35 @@ def import_procurewizard_csv(db: Connection, filename: str, csv_text: str) -> di
     }
 
 
-def active_import(db: Connection) -> dict[str, Any] | None:
+def active_import(db: Connection, outlet_id: str = "cellar") -> dict[str, Any] | None:
+    outlet_id = normalize_outlet_id(outlet_id)
     row = db.execute(
-        "SELECT * FROM procurewizard_imports WHERE active = 1 ORDER BY created_at DESC LIMIT 1"
+        """
+        SELECT * FROM procurewizard_imports
+        WHERE active = 1 AND outlet_id = ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (outlet_id,),
     ).fetchone()
     return dict(row) if row else None
 
 
-def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
-    active = active_import(db)
+def import_summary(db: Connection, session_id: str = "", outlet_id: str = "cellar") -> dict[str, Any]:
+    outlet_id = normalize_outlet_id(outlet_id)
+    active = active_import(db, outlet_id)
+    active_outlets = [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT outlet_id, filename, row_count, created_at
+            FROM procurewizard_imports
+            WHERE active = 1
+            ORDER BY outlet_id
+            """
+        ).fetchall()
+    ]
     if not active:
-        return {"active": None, "rows": [], "counts": {}, "session": {}}
+        return {"active": None, "active_outlets": active_outlets, "outlet_id": outlet_id, "rows": [], "counts": {}, "session": {}}
     counts = {
         row["match_status"]: row["c"]
         for row in db.execute(
@@ -384,35 +420,35 @@ def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
             SELECT COUNT(*) AS line_count, COUNT(DISTINCT product_id) AS product_count,
                    COALESCE(SUM(CAST(quantity_decimal AS REAL)), 0) AS quantity_total
             FROM stocktake_lines
-            WHERE session_id = ?
+            WHERE session_id = ? AND location_id = ?
             """,
-            (session_id,),
+            (session_id, outlet_id),
         ).fetchone()
         pw_totals = db.execute(
             """
             SELECT COUNT(DISTINCT sl.product_id) AS product_count,
                    COALESCE(SUM(CAST(sl.quantity_decimal AS REAL)), 0) AS quantity_total
             FROM stocktake_lines sl
-            WHERE sl.session_id = ?
+            WHERE sl.session_id = ? AND sl.location_id = ?
               AND EXISTS (
                 SELECT 1 FROM procurewizard_rows pwr
                 WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
               )
             """,
-            (session_id, active["id"]),
+            (session_id, outlet_id, active["id"]),
         ).fetchone()
         unmapped_totals = db.execute(
             """
             SELECT COUNT(DISTINCT sl.product_id) AS product_count,
                    COALESCE(SUM(CAST(sl.quantity_decimal AS REAL)), 0) AS quantity_total
             FROM stocktake_lines sl
-            WHERE sl.session_id = ?
+            WHERE sl.session_id = ? AND sl.location_id = ?
               AND NOT EXISTS (
                 SELECT 1 FROM procurewizard_rows pwr
                 WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
               )
             """,
-            (session_id, active["id"]),
+            (session_id, outlet_id, active["id"]),
         ).fetchone()
         unmapped = [
             dict(row)
@@ -423,7 +459,7 @@ def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
                        COUNT(*) AS line_count, SUM(CAST(sl.quantity_decimal AS REAL)) AS quantity_total
                 FROM stocktake_lines sl
                 LEFT JOIN products p ON p.id = sl.product_id
-                WHERE sl.session_id = ?
+                WHERE sl.session_id = ? AND sl.location_id = ?
                   AND NOT EXISTS (
                     SELECT 1 FROM procurewizard_rows pwr
                     WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
@@ -432,7 +468,7 @@ def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
                 ORDER BY quantity_total DESC, product_name
                 LIMIT 20
                 """,
-                (session_id, active["id"]),
+                (session_id, outlet_id, active["id"]),
             ).fetchall()
         ]
         session.update(
@@ -455,7 +491,7 @@ def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
                    COALESCE((
                      SELECT SUM(CAST(sl.quantity_decimal AS REAL))
                      FROM stocktake_lines sl
-                     WHERE sl.session_id = ? AND sl.product_id = pwr.product_id
+                     WHERE sl.session_id = ? AND sl.location_id = ? AND sl.product_id = pwr.product_id
                    ), 0) AS counted_quantity
             FROM procurewizard_rows pwr
             LEFT JOIN products p ON p.id = pwr.product_id
@@ -465,10 +501,17 @@ def import_summary(db: Connection, session_id: str = "") -> dict[str, Any]:
                      pwr.match_score ASC, pwr.row_index ASC
             LIMIT 100
             """,
-            (session_id, active["id"]),
+            (session_id, outlet_id, active["id"]),
         ).fetchall()
     ]
-    return {"active": active, "rows": rows, "counts": counts, "session": session}
+    return {
+        "active": active,
+        "active_outlets": active_outlets,
+        "outlet_id": outlet_id,
+        "rows": rows,
+        "counts": counts,
+        "session": session,
+    }
 
 
 def link_procurewizard_row(db: Connection, row_id: str, product_id: str | None) -> dict[str, Any]:
@@ -524,15 +567,20 @@ def format_decimal(value: Decimal) -> str:
     return format(normalized, "f")
 
 
-def counted_quantities_by_product(db: Connection, session_id: str) -> dict[str, dict[str, Decimal]]:
+def counted_quantities_by_product(
+    db: Connection,
+    session_id: str,
+    outlet_id: str | None = None,
+) -> dict[str, dict[str, Decimal]]:
     totals: dict[str, dict[str, Decimal]] = {}
     rows = db.execute(
         """
         SELECT product_id, quantity_decimal, COALESCE(case_type, 'split') AS case_type
         FROM stocktake_lines
         WHERE session_id = ? AND COALESCE(product_id, '') != ''
+          AND (? IS NULL OR location_id = ?)
         """,
-        (session_id,),
+        (session_id, outlet_id, outlet_id),
     ).fetchall()
     for row in rows:
         try:
@@ -545,20 +593,25 @@ def counted_quantities_by_product(db: Connection, session_id: str) -> dict[str, 
     return totals
 
 
-def build_procurewizard_csv(db: Connection, session_id: str) -> tuple[str, bytes]:
-    active = active_import(db)
+def build_procurewizard_csv(
+    db: Connection,
+    session_id: str,
+    outlet_id: str = "cellar",
+) -> tuple[str, bytes]:
+    outlet_id = normalize_outlet_id(outlet_id)
+    active = active_import(db, outlet_id)
     if not active:
-        raise ValueError("No active ProcureWizard import found.")
-    totals = counted_quantities_by_product(db, session_id)
+        raise ValueError(f"No active ProcureWizard import found for outlet {outlet_id}.")
+    totals = counted_quantities_by_product(db, session_id, outlet_id)
     mapped_product_count = db.execute(
         """
         SELECT COUNT(DISTINCT product_id) AS c
         FROM procurewizard_rows
         WHERE import_id = ? AND product_id IN (
-          SELECT DISTINCT product_id FROM stocktake_lines WHERE session_id = ?
+          SELECT DISTINCT product_id FROM stocktake_lines WHERE session_id = ? AND location_id = ?
         )
         """,
-        (active["id"], session_id),
+        (active["id"], session_id, outlet_id),
     ).fetchone()["c"]
     if not mapped_product_count:
         raise ValueError(
@@ -587,5 +640,5 @@ def build_procurewizard_csv(db: Connection, session_id: str) -> tuple[str, bytes
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerows(output_rows)
-    filename = f"procurewizard-{session_id}.csv"
+    filename = f"procurewizard-{outlet_id}-{session_id}.csv"
     return filename, stream.getvalue().encode("cp1252", errors="replace")

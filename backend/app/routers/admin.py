@@ -1123,7 +1123,7 @@ def admin_import_procurewizard(
     init_db()
     with get_db() as db:
         try:
-            result = import_procurewizard_csv(db, request.filename, request.csv_text)
+            result = import_procurewizard_csv(db, request.filename, request.csv_text, request.outlet_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
@@ -1131,12 +1131,13 @@ def admin_import_procurewizard(
 @router.get("/admin/api/procurewizard/status")
 def admin_procurewizard_status(
     session_id: str = "",
+    outlet_id: str = "cellar",
     _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
 ) -> dict:
     require_admin(_)
     init_db()
     with get_db() as db:
-        return import_summary(db, session_id)
+        return import_summary(db, session_id, outlet_id)
 
 @router.patch("/admin/api/procurewizard/rows/{row_id}")
 def admin_link_procurewizard_row(
@@ -1155,13 +1156,14 @@ def admin_link_procurewizard_row(
 @router.get("/admin/api/procurewizard/export/{session_id}")
 def admin_export_procurewizard_csv(
     session_id: str,
+    outlet_id: str = "cellar",
     _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
 ) -> Response:
     require_admin(_)
     init_db()
     with get_db() as db:
         try:
-            filename, payload = build_procurewizard_csv(db, session_id)
+            filename, payload = build_procurewizard_csv(db, session_id, outlet_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(
