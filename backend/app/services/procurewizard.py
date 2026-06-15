@@ -243,7 +243,10 @@ def ensure_procurewizard_product(db: Connection, row: dict[str, str], current: s
         )
         VALUES (?, ?, ?, ?, ?, ?, 'case', '', 'Imported from ProcureWizard CSV', 'confirmed', ?)
         ON CONFLICT(id) DO UPDATE SET
-            bin = excluded.bin,
+            bin = CASE
+                WHEN COALESCE(TRIM(products.bin), '') = '' THEN excluded.bin
+                ELSE products.bin
+            END,
             name = excluded.name,
             category = excluded.category,
             size = excluded.size,

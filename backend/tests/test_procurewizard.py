@@ -241,7 +241,7 @@ def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(
     bar_csv = sample_csv().replace(
         "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6]",
         "777777,777777,22,Gin,Bar Exclusive Gin,6 x 70 cl [6]",
-    )
+    ).replace("3862551,3862551,0,Bourbon", "3862551,BAR-99,0,Bourbon")
 
     with database.get_db() as db:
         cellar = import_procurewizard_csv(db, "cellar.csv", sample_csv(), "cellar")
@@ -273,6 +273,13 @@ def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(
         alias = db.execute(
             "SELECT product_id, label FROM product_barcodes WHERE barcode = '5010327001234'"
         ).fetchone()
+        master = db.execute(
+            "SELECT bin FROM products WHERE id = 'procurewizard-3862551'"
+        ).fetchone()
+        bar_jd = db.execute(
+            "SELECT bin_number FROM procurewizard_rows WHERE import_id = ? AND pid = '3862551'",
+            (bar["import_id"],),
+        ).fetchone()
         cellar_summary = import_summary(db, "session-outlets", "cellar")
         bar_summary = import_summary(db, "session-outlets", "main-bar")
         cellar_filename, cellar_payload = build_procurewizard_csv(db, "session-outlets", "cellar")
@@ -286,6 +293,8 @@ def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(
     ]
     assert alias["product_id"] == "procurewizard-3862551"
     assert alias["label"] == "Mapped barcode"
+    assert master["bin"] == "3862551"
+    assert bar_jd["bin_number"] == "BAR-99"
     assert cellar_summary["session"]["pw_quantity_total"] == "4"
     assert bar_summary["session"]["pw_quantity_total"] == "7"
     assert cellar_filename == "procurewizard-cellar-session-outlets.csv"
