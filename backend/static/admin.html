@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
-    <link rel="stylesheet" href="/admin.css?v=outlet-pw-1">
+    <link rel="stylesheet" href="/admin.css?v=outlet-pw-2">
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -249,18 +249,19 @@
               <h3>ProcureWizard CSV</h3>
               <p class="section-desc">Upload the stocktake template, link products, then export the same CSV format.</p>
             </div>
+            <label class="pw-outlet-picker">
+              <span>Import destination</span>
+              <select id="pwOutlet">
+                <option value="cellar">Cellar</option>
+                <option value="main-bar">Bar</option>
+                <option value="brasseries">Brasseries</option>
+                <option value="m-and-e">M&amp;E</option>
+              </select>
+              <small>The selected outlet receives this template. Existing product barcodes and master BINs remain unchanged.</small>
+            </label>
             <div class="pw-import-row">
-              <label>
-                Outlet
-                <select id="pwOutlet">
-                  <option value="cellar">Cellar</option>
-                  <option value="main-bar">Bar</option>
-                  <option value="brasseries">Brasseries</option>
-                  <option value="m-and-e">M&amp;E</option>
-                </select>
-              </label>
               <input id="pwCsvFile" type="file" accept=".csv,text/csv">
-              <button id="pwImportButton" class="secondary" type="button">Import CSV</button>
+              <button id="pwImportButton" class="secondary" type="button">Import CSV to Cellar</button>
               <a id="pwDownloadLink" class="download-link disabled" href="#">Download ProcureWizard CSV</a>
             </div>
             <div id="pwStatus" class="source-list"></div>
@@ -399,6 +400,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=outlet-pw-1" type="module"></script>
+    <script src="/admin.js?v=outlet-pw-2" type="module"></script>
   </body>
 </html>

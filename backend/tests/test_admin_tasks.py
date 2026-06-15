@@ -35,7 +35,8 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=outlet-pw-1" in response.text
+    assert "admin.js?v=outlet-pw-2" in response.text
+    assert "Import destination" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):

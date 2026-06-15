@@ -1140,6 +1140,11 @@ async function importProcureWizardCsv() {
   }
 }
 
+function updateProcureWizardOutletControls() {
+  const outletName = els.pwOutlet?.selectedOptions?.[0]?.textContent || "selected outlet";
+  els.pwImportButton.textContent = `Import CSV to ${outletName}`;
+}
+
 function showTask(task) {
   const suggestion = task.suggested || {};
   state.selectedTask = task;
@@ -1757,7 +1762,11 @@ function bindEvents() {
 
   els.exportSession.addEventListener("change", () => loadExportReview());
   els.pwImportButton.addEventListener("click", importProcureWizardCsv);
-  els.pwOutlet?.addEventListener("change", () => loadProcureWizardStatus());
+  els.pwOutlet?.addEventListener("change", () => {
+    updateProcureWizardOutletControls();
+    loadProcureWizardStatus();
+  });
+  updateProcureWizardOutletControls();
   els.catalogExportRefresh.addEventListener("click", loadCatalogExportSummary);
   els.catalogRestoreButton.addEventListener("click", restoreCatalogCsv);
   els.pwRows.addEventListener("click", async (event) => {
