@@ -21,8 +21,11 @@ from ..services.enrichment import fetch_product_suggestion, save_product_image
 from ..services.procurewizard import (
     build_procurewizard_csv,
     import_procurewizard_csv,
+    import_procurewizard_csv_bytes,
     import_summary,
     link_procurewizard_row,
+    set_template_archived,
+    template_library,
 )
 from ..services.catalog_portability import (
     build_catalog_backup,
@@ -204,19 +207,24 @@ def decorate_product(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]
 
 def mapping_product(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     product = decorate_product(db, row)
-    procurewizard = db.execute(
+    memberships = [
+        dict(item)
+        for item in db.execute(
         """
-        SELECT pwr.id AS row_id, pwr.pid, pwr.bin_number, pwr.pos, pwr.pack_size,
-               pwr.match_status, pwi.filename
-        FROM procurewizard_rows pwr
-        JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
-        WHERE pwr.product_id = ?
-        ORDER BY pwr.row_index
-        LIMIT 1
+        SELECT ptr.id AS row_id, ptr.pid, ptr.bin_number, ptr.pos, ptr.pack_size,
+               prm.status AS match_status, pwt.id AS template_id, pwt.filename,
+               pwt.archived_at
+        FROM procurewizard_template_rows ptr
+        JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+        JOIN procurewizard_templates pwt ON pwt.id = ptr.template_id
+        WHERE prm.product_id = ?
+        ORDER BY pwt.archived_at IS NOT NULL, pwt.created_at DESC, ptr.row_index
         """,
         (product["id"],),
-    ).fetchone()
-    product["procurewizard"] = dict(procurewizard) if procurewizard else None
+        ).fetchall()
+    ]
+    product["procurewizard"] = memberships[0] if memberships else None
+    product["procurewizard_memberships"] = memberships
     product["needs_real_barcode"] = product["real_barcode_count"] == 0
     return product
 
@@ -271,10 +279,9 @@ def admin_dashboard(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) ->
             "pw_rows": db.execute(
                 """
                 SELECT COUNT(*) AS c
-                FROM procurewizard_rows
-                WHERE import_id = (
-                    SELECT id FROM procurewizard_imports WHERE active = 1 ORDER BY created_at DESC LIMIT 1
-                )
+                FROM procurewizard_template_rows ptr
+                JOIN procurewizard_templates pwt ON pwt.id = ptr.template_id
+                WHERE pwt.archived_at IS NULL
                 """
             ).fetchone()["c"],
             "sessions": db.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"],
@@ -356,12 +363,12 @@ def admin_barcode_mapping_products(
                 )
                 OR EXISTS (
                     SELECT 1
-                    FROM procurewizard_rows pwr
-                    JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
-                    WHERE pwr.product_id = p.id
-                      AND lower(pwr.pid || ' ' || COALESCE(pwr.bin_number, '') || ' ' ||
-                                pwr.description || ' ' || COALESCE(pwr.category, '') || ' ' ||
-                                COALESCE(pwr.pack_size, '')) LIKE ?
+                    FROM procurewizard_template_rows ptr
+                    JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+                    WHERE prm.product_id = p.id
+                      AND lower(ptr.pid || ' ' || COALESCE(ptr.bin_number, '') || ' ' ||
+                                ptr.description || ' ' || COALESCE(ptr.category, '') || ' ' ||
+                                COALESCE(ptr.pack_size, '')) LIKE ?
                 )
             )
             """
@@ -463,6 +470,10 @@ def admin_merge_products(
         db.execute("UPDATE stocktake_lines SET product_id = ? WHERE product_id = ?", (target_id, source_id))
         db.execute("UPDATE product_tasks SET draft_product_id = ? WHERE draft_product_id = ?", (target_id, source_id))
         db.execute("UPDATE procurewizard_rows SET product_id = ?, updated_at = ? WHERE product_id = ?", (target_id, now_iso(), source_id))
+        db.execute(
+            "UPDATE procurewizard_row_mappings SET product_id = ?, updated_at = ? WHERE product_id = ?",
+            (target_id, now_iso(), source_id),
+        )
         db.execute(
             """
             UPDATE product_barcodes
@@ -734,7 +745,7 @@ def admin_delete_product(
             """
             SELECT
                 (SELECT COUNT(*) FROM stocktake_lines WHERE product_id = ?) AS line_count,
-                (SELECT COUNT(*) FROM procurewizard_rows WHERE product_id = ?) AS pw_count
+                (SELECT COUNT(*) FROM procurewizard_row_mappings WHERE product_id = ?) AS pw_count
             """,
             (product_id, product_id),
         ).fetchone()
@@ -1128,16 +1139,58 @@ def admin_import_procurewizard(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
 
-@router.get("/admin/api/procurewizard/status")
-def admin_procurewizard_status(
-    session_id: str = "",
-    outlet_id: str = "cellar",
+@router.post("/admin/api/procurewizard/import-file")
+async def admin_import_procurewizard_file(
+    request: Request,
+    filename: str = "procurewizard.csv",
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    payload = await request.body()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Choose a non-empty ProcureWizard CSV.")
+    with get_db() as db:
+        try:
+            return import_procurewizard_csv_bytes(db, filename, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.get("/admin/api/procurewizard/templates")
+def admin_procurewizard_templates(
+    include_archived: bool = False,
     _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
 ) -> dict:
     require_admin(_)
     init_db()
     with get_db() as db:
-        return import_summary(db, session_id, outlet_id)
+        return {"templates": template_library(db, include_archived)}
+
+@router.post("/admin/api/procurewizard/templates/{template_id}/archive")
+def admin_archive_procurewizard_template(
+    template_id: str,
+    archived: bool = True,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        try:
+            return set_template_archived(db, template_id, archived)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@router.get("/admin/api/procurewizard/status")
+def admin_procurewizard_status(
+    session_id: str = "",
+    location_id: str = "cellar",
+    template_id: str = "",
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        return import_summary(db, session_id, location_id, template_id)
 
 @router.patch("/admin/api/procurewizard/rows/{row_id}")
 def admin_link_procurewizard_row(
@@ -1156,20 +1209,44 @@ def admin_link_procurewizard_row(
 @router.get("/admin/api/procurewizard/export/{session_id}")
 def admin_export_procurewizard_csv(
     session_id: str,
-    outlet_id: str = "cellar",
+    template_id: str,
+    location_id: str,
+    warnings_acknowledged: bool = False,
     _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
 ) -> Response:
     require_admin(_)
     init_db()
     with get_db() as db:
         try:
-            filename, payload = build_procurewizard_csv(db, session_id, outlet_id)
+            filename, payload = build_procurewizard_csv(
+                db, session_id, location_id, template_id, warnings_acknowledged
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(
         payload,
         media_type="text/csv; charset=windows-1252",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@router.get("/admin/api/procurewizard/export-runs/{run_id}/download")
+def admin_download_procurewizard_export_run(
+    run_id: str,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> Response:
+    require_admin(_)
+    init_db()
+    with get_db() as db:
+        run = db.execute(
+            "SELECT filename, output_bytes FROM procurewizard_export_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+    if not run or run["output_bytes"] is None:
+        raise HTTPException(status_code=404, detail="Retained ProcureWizard export not found")
+    return Response(
+        run["output_bytes"],
+        media_type="text/csv; charset=windows-1252",
+        headers={"Content-Disposition": f'attachment; filename="{run["filename"]}"'},
     )
 
 @router.get("/admin/api/catalog-export/summary")

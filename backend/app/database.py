@@ -275,6 +275,81 @@ def init_db(force: bool = False) -> None:
                 FOREIGN KEY(import_id) REFERENCES procurewizard_imports(id) ON DELETE CASCADE,
                 FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_templates (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                original_bytes BLOB,
+                file_sha256 TEXT,
+                encoding TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                header_json TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'upload',
+                archived_at TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_template_rows (
+                id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                pid TEXT NOT NULL,
+                bin_number TEXT,
+                pos TEXT,
+                category TEXT,
+                description TEXT NOT NULL,
+                pack_size TEXT,
+                est_fc TEXT,
+                est_sc TEXT,
+                close_fc TEXT,
+                close_sc TEXT,
+                raw_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(template_id) REFERENCES procurewizard_templates(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_row_mappings (
+                row_id TEXT PRIMARY KEY,
+                product_id TEXT,
+                status TEXT NOT NULL DEFAULT 'unmatched',
+                score REAL NOT NULL DEFAULT 0,
+                reason TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(row_id) REFERENCES procurewizard_template_rows(id) ON DELETE CASCADE,
+                FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                reused INTEGER NOT NULL DEFAULT 0,
+                uploaded_at TEXT NOT NULL,
+                FOREIGN KEY(template_id) REFERENCES procurewizard_templates(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS procurewizard_export_runs (
+                id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                location_id TEXT NOT NULL,
+                warnings_json TEXT NOT NULL DEFAULT '[]',
+                warnings_acknowledged INTEGER NOT NULL DEFAULT 0,
+                output_sha256 TEXT NOT NULL,
+                output_bytes BLOB,
+                filename TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(template_id) REFERENCES procurewizard_templates(id),
+                FOREIGN KEY(session_id) REFERENCES sessions(id),
+                FOREIGN KEY(location_id) REFERENCES locations(id)
+            );
             """
         )
         add_column_if_missing(db, "products", "photo_source_url", "TEXT")
@@ -287,6 +362,8 @@ def init_db(force: bool = False) -> None:
         add_column_if_missing(db, "sessions", "exported_at", "TEXT")
         add_column_if_missing(db, "stocktake_lines", "case_type", "TEXT NOT NULL DEFAULT 'split'")
         add_column_if_missing(db, "procurewizard_imports", "outlet_id", "TEXT NOT NULL DEFAULT 'cellar'")
+        add_column_if_missing(db, "schema_migrations", "description", "TEXT NOT NULL DEFAULT ''")
+        add_column_if_missing(db, "procurewizard_export_runs", "output_bytes", "BLOB")
         db.execute(
             """
             INSERT OR IGNORE INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
@@ -352,10 +429,110 @@ def init_db(force: bool = False) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_imports_active_outlet
             ON procurewizard_imports(outlet_id)
             WHERE active = 1;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_templates_sha
+            ON procurewizard_templates(file_sha256)
+            WHERE file_sha256 IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_procurewizard_template_rows_position
+            ON procurewizard_template_rows(template_id, row_index);
+            CREATE INDEX IF NOT EXISTS idx_procurewizard_template_rows_pid
+            ON procurewizard_template_rows(template_id, pid);
+            CREATE INDEX IF NOT EXISTS idx_procurewizard_row_mappings_product
+            ON procurewizard_row_mappings(product_id);
+            CREATE INDEX IF NOT EXISTS idx_procurewizard_uploads_template
+            ON procurewizard_uploads(template_id, uploaded_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_procurewizard_export_runs_tuple
+            ON procurewizard_export_runs(template_id, session_id, location_id, created_at DESC);
             """
         )
+        migrate_procurewizard_template_library(db)
         db.commit()
     _INITIALIZED_DB_PATH = DB_PATH
+
+
+def migrate_procurewizard_template_library(db: sqlite3.Connection) -> None:
+    version = 3
+    if db.execute("SELECT 1 FROM schema_migrations WHERE version = ?", (version,)).fetchone():
+        return
+    current = now_iso()
+    imports = db.execute("SELECT * FROM procurewizard_imports ORDER BY created_at, id").fetchall()
+    for item in imports:
+        template_id = item["id"]
+        if db.execute("SELECT 1 FROM procurewizard_templates WHERE id = ?", (template_id,)).fetchone():
+            continue
+        db.execute(
+            """
+            INSERT INTO procurewizard_templates (
+                id, filename, original_bytes, file_sha256, encoding, metadata_json,
+                header_json, row_count, source_type, archived_at, created_at
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'legacy', NULL, ?)
+            """,
+            (
+                template_id,
+                item["filename"],
+                None,
+                item["encoding"],
+                item["metadata_json"],
+                item["header_json"],
+                item["row_count"],
+                item["created_at"],
+            ),
+        )
+        rows = db.execute(
+            "SELECT * FROM procurewizard_rows WHERE import_id = ? ORDER BY row_index",
+            (template_id,),
+        ).fetchall()
+        for row in rows:
+            db.execute(
+                """
+                INSERT INTO procurewizard_template_rows (
+                    id, template_id, row_index, pid, bin_number, pos, category,
+                    description, pack_size, est_fc, est_sc, close_fc, close_sc,
+                    raw_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"], template_id, row["row_index"], row["pid"], row["bin_number"],
+                    row["pos"], row["category"], row["description"], row["pack_size"],
+                    row["est_fc"], row["est_sc"], row["close_fc"], row["close_sc"],
+                    row["raw_json"], row["created_at"],
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO procurewizard_row_mappings (
+                    row_id, product_id, status, score, reason, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"], row["product_id"], row["match_status"], row["match_score"],
+                    row["match_reason"], row["updated_at"],
+                ),
+            )
+        db.execute(
+            """
+            INSERT INTO procurewizard_uploads (template_id, filename, reused, uploaded_at)
+            VALUES (?, ?, 0, ?)
+            """,
+            (template_id, item["filename"], item["created_at"]),
+        )
+    db.execute("DELETE FROM product_barcodes WHERE label = 'ProcureWizard PID'")
+    db.execute(
+        """
+        UPDATE products
+        SET barcode = (
+            SELECT pb.barcode FROM product_barcodes pb
+            WHERE pb.product_id = products.id
+            ORDER BY pb.is_primary DESC, pb.created_at, pb.barcode
+            LIMIT 1
+        )
+        WHERE id LIKE 'procurewizard-%'
+          AND barcode NOT IN (SELECT barcode FROM product_barcodes)
+        """
+    )
+    db.execute(
+        "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+        (version, "ProcureWizard retained template library", current),
+    )
 
 def product_select_sql() -> str:
     return """

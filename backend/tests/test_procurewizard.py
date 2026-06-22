@@ -5,6 +5,7 @@ from app.services.procurewizard import (
     build_procurewizard_csv,
     import_summary,
     import_procurewizard_csv,
+    import_procurewizard_csv_bytes,
     link_procurewizard_row,
     parse_procurewizard_csv_bytes,
 )
@@ -78,7 +79,7 @@ def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tm
     now = datetime.now(timezone.utc).isoformat()
     with database.get_db() as db:
         product = db.execute("SELECT id, barcode, name, bin FROM products WHERE id = 'procurewizard-3862551'").fetchone()
-        assert product["barcode"] == "3862551"
+        assert product["barcode"] is None
         assert product["name"] == "Jack Daniels Rye"
         assert product["bin"] == "3862551"
         db.execute(
@@ -93,10 +94,10 @@ def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tm
             (now,),
         )
         db.commit()
-        filename, payload = build_procurewizard_csv(db, "session-pw")
+        filename, payload = build_procurewizard_csv(db, "session-pw", template_id=result["template_id"])
 
     exported = payload.decode("cp1252")
-    assert filename == "procurewizard-cellar-session-pw.csv"
+    assert result["template_id"] in filename
     assert "21041,928291,<-- Do not delete or edit" in exported
     assert "3862551,3862551,0,Bourbon / American Whiskey,Jack Daniels Rye,1 x 70 cl [1],0,0,,11.5" in exported
     assert "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6],0,0,," in exported
@@ -130,7 +131,42 @@ def test_procurewizard_export_separates_full_and_split_case_counts(tmp_path, mon
     assert "675430,675430,19264,Rosé Wine,\"Mirabeau Pure Rosé, Côtes de Provence\",6 x 75 cl [6],0,0,3,5" in exported
 
 
-def test_manual_procurewizard_link_persists_as_pid_alias_across_reimport(tmp_path, monkeypatch):
+def test_procurewizard_export_preserves_explicit_zero_and_records_audit(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with database.get_db() as db:
+        imported = import_procurewizard_csv(db, "pw.csv", sample_csv())
+        db.execute("INSERT INTO locations (id, name) VALUES ('cellar', 'Cellar')")
+        db.execute(
+            "INSERT INTO sessions (id, name, period_date, status) VALUES ('session-zero', 'Zero', '2026-06-15', 'review')"
+        )
+        db.execute(
+            """
+            INSERT INTO stocktake_lines (
+                id, session_id, location_id, product_id, barcode_snapshot, product_name_snapshot,
+                quantity_decimal, case_type, draft_status, counted_at, device_id
+            ) VALUES ('line-zero', 'session-zero', 'cellar', 'procurewizard-3862551', '',
+                      'Jack Daniels Rye', '0', 'split', 'confirmed', ?, 'device-a')
+            """,
+            (now,),
+        )
+        db.commit()
+        _, payload = build_procurewizard_csv(
+            db, "session-zero", "cellar", imported["template_id"], warnings_acknowledged=True
+        )
+        audit = db.execute("SELECT * FROM procurewizard_export_runs").fetchone()
+
+    assert "Jack Daniels Rye,1 x 70 cl [1],0,0,,0" in payload.decode("cp1252")
+    assert audit["template_id"] == imported["template_id"]
+    assert audit["warnings_acknowledged"] == 1
+    assert len(audit["output_sha256"]) == 64
+    assert audit["output_bytes"] == payload
+
+
+def test_manual_procurewizard_link_stays_template_specific_and_pid_is_not_barcode(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     database.init_db(force=True)
@@ -150,15 +186,19 @@ def test_manual_procurewizard_link_persists_as_pid_alias_across_reimport(tmp_pat
 
     with database.get_db() as db:
         alias = db.execute("SELECT product_id, label FROM product_barcodes WHERE barcode = '3862551'").fetchone()
-        assert alias["product_id"] == "product-real-jd"
-        assert alias["label"] == "ProcureWizard PID"
+        assert alias is None
         second = import_procurewizard_csv(db, "pw2.csv", sample_csv())
         row = db.execute(
-            "SELECT product_id, match_reason FROM procurewizard_rows WHERE import_id = ? AND pid = '3862551'",
-            (second["import_id"],),
+            """
+            SELECT prm.product_id, prm.reason
+            FROM procurewizard_template_rows ptr
+            JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            WHERE ptr.template_id = ? AND ptr.pid = '3862551'
+            """,
+            (second["template_id"],),
         ).fetchone()
         assert row["product_id"] == "product-real-jd"
-        assert row["match_reason"] == "pid/barcode match"
+        assert second["reused"] is True
 
 
 def test_procurewizard_session_summary_separates_mapped_and_unmapped_counts(tmp_path, monkeypatch):
@@ -233,7 +273,7 @@ def test_procurewizard_export_rejects_session_without_linked_counts(tmp_path, mo
             raise AssertionError("Expected ProcureWizard export to reject an unchanged template")
 
 
-def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(tmp_path, monkeypatch):
+def test_multiple_templates_preserve_mapped_barcodes_and_export_by_selected_template(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     database.init_db(force=True)
@@ -267,8 +307,8 @@ def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(
         )
         db.commit()
 
-        active = db.execute(
-            "SELECT outlet_id, filename FROM procurewizard_imports WHERE active = 1 ORDER BY outlet_id"
+        templates = db.execute(
+            "SELECT id, filename FROM procurewizard_templates ORDER BY created_at"
         ).fetchall()
         alias = db.execute(
             "SELECT product_id, label FROM product_barcodes WHERE barcode = '5010327001234'"
@@ -280,16 +320,14 @@ def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(
             "SELECT bin_number FROM procurewizard_rows WHERE import_id = ? AND pid = '3862551'",
             (bar["import_id"],),
         ).fetchone()
-        cellar_summary = import_summary(db, "session-outlets", "cellar")
-        bar_summary = import_summary(db, "session-outlets", "main-bar")
-        cellar_filename, cellar_payload = build_procurewizard_csv(db, "session-outlets", "cellar")
-        bar_filename, bar_payload = build_procurewizard_csv(db, "session-outlets", "main-bar")
+        cellar_summary = import_summary(db, "session-outlets", "cellar", cellar["template_id"])
+        bar_summary = import_summary(db, "session-outlets", "main-bar", bar["template_id"])
+        cellar_filename, cellar_payload = build_procurewizard_csv(db, "session-outlets", "cellar", cellar["template_id"])
+        bar_filename, bar_payload = build_procurewizard_csv(db, "session-outlets", "main-bar", bar["template_id"])
 
-    assert cellar["outlet_id"] == "cellar"
-    assert bar["outlet_id"] == "main-bar"
-    assert [(row["outlet_id"], row["filename"]) for row in active] == [
-        ("cellar", "cellar.csv"),
-        ("main-bar", "bar.csv"),
+    assert [(row["id"], row["filename"]) for row in templates] == [
+        (cellar["template_id"], "cellar.csv"),
+        (bar["template_id"], "bar.csv"),
     ]
     assert alias["product_id"] == "procurewizard-3862551"
     assert alias["label"] == "Mapped barcode"
@@ -297,7 +335,100 @@ def test_multiple_outlet_imports_preserve_mapped_barcodes_and_export_separately(
     assert bar_jd["bin_number"] == "BAR-99"
     assert cellar_summary["session"]["pw_quantity_total"] == "4"
     assert bar_summary["session"]["pw_quantity_total"] == "7"
-    assert cellar_filename == "procurewizard-cellar-session-outlets.csv"
-    assert bar_filename == "procurewizard-main-bar-session-outlets.csv"
+    assert cellar["template_id"] in cellar_filename
+    assert bar["template_id"] in bar_filename
     assert "Jack Daniels Rye,1 x 70 cl [1],0,0,,4" in cellar_payload.decode("cp1252")
     assert "Bar Exclusive Gin,6 x 70 cl [6],0,0,,7" in bar_payload.decode("cp1252")
+
+
+def test_duplicate_raw_upload_reuses_immutable_template(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    payload = sample_csv().encode("cp1252")
+
+    with database.get_db() as db:
+        first = import_procurewizard_csv_bytes(db, "first.csv", payload)
+        second = import_procurewizard_csv_bytes(db, "renamed.csv", payload)
+        template_count = db.execute("SELECT COUNT(*) AS c FROM procurewizard_templates").fetchone()["c"]
+        upload_count = db.execute("SELECT COUNT(*) AS c FROM procurewizard_uploads").fetchone()["c"]
+
+    assert first["template_id"] == second["template_id"]
+    assert second["reused"] is True
+    assert template_count == 1
+    assert upload_count == 2
+
+
+def test_reused_pid_with_different_description_does_not_reuse_product(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    changed = sample_csv().replace("Jack Daniels Rye", "Different Product")
+
+    with database.get_db() as db:
+        first = import_procurewizard_csv(db, "first.csv", sample_csv())
+        second = import_procurewizard_csv(db, "second.csv", changed)
+        products = db.execute(
+            """
+            SELECT prm.product_id
+            FROM procurewizard_template_rows ptr
+            JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            WHERE ptr.pid = '3862551'
+            ORDER BY ptr.template_id
+            """
+        ).fetchall()
+
+    assert first["template_id"] != second["template_id"]
+    assert len({row["product_id"] for row in products}) == 2
+
+
+def test_legacy_import_migration_preserves_rows_and_removes_pid_alias(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with database.get_db() as db:
+        db.execute("DELETE FROM schema_migrations WHERE version = 3")
+        db.execute(
+            """
+            INSERT INTO products (id, barcode, name, unit, draft_status, product_updated_at)
+            VALUES ('procurewizard-42', '42', 'Legacy Product', 'case', 'confirmed', ?)
+            """,
+            (now,),
+        )
+        db.execute(
+            "INSERT INTO product_barcodes VALUES ('42', 'procurewizard-42', 'ProcureWizard PID', 1, ?)",
+            (now,),
+        )
+        db.execute(
+            """
+            INSERT INTO procurewizard_imports
+                (id, filename, encoding, metadata_json, header_json, row_count, active, created_at, outlet_id)
+            VALUES ('legacy-template', 'legacy.csv', 'cp1252', '[]', '[]', 1, 1, ?, 'cellar')
+            """,
+            (now,),
+        )
+        db.execute(
+            """
+            INSERT INTO procurewizard_rows (
+                id, import_id, row_index, pid, description, raw_json, product_id,
+                match_status, match_score, created_at, updated_at
+            ) VALUES ('legacy-row', 'legacy-template', 2, '42', 'Legacy Product', '[]',
+                      'procurewizard-42', 'manual', 1, ?, ?)
+            """,
+            (now, now),
+        )
+        db.commit()
+
+    database.init_db(force=True)
+    with database.get_db() as db:
+        template = db.execute("SELECT source_type FROM procurewizard_templates WHERE id = 'legacy-template'").fetchone()
+        mapping = db.execute("SELECT product_id FROM procurewizard_row_mappings WHERE row_id = 'legacy-row'").fetchone()
+        alias = db.execute("SELECT 1 FROM product_barcodes WHERE barcode = '42'").fetchone()
+        product = db.execute("SELECT barcode FROM products WHERE id = 'procurewizard-42'").fetchone()
+
+    assert template["source_type"] == "legacy"
+    assert mapping["product_id"] == "procurewizard-42"
+    assert alias is None
+    assert product["barcode"] is None

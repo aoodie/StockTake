@@ -595,9 +595,14 @@ label {
 }
 .pw-import-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 10px;
   align-items: center;
+}
+.pw-selection-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 .pw-outlet-picker {
   display: grid;
@@ -627,6 +632,22 @@ label {
   grid-template-columns: minmax(0, 1fr) 72px;
   gap: 8px;
   align-items: end;
+}
+.pw-export-history {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+}
+.pw-export-history a {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-main);
+}
+.pw-export-history small {
+  color: var(--text-muted);
 }
 
 .ai-toolbar {
@@ -1513,6 +1534,9 @@ dialog footer {
     grid-template-columns: 1fr;
   }
   .pw-outlet-picker {
+    grid-template-columns: 1fr;
+  }
+  .pw-selection-grid {
     grid-template-columns: 1fr;
   }
   .pw-import-row > *,

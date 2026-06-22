@@ -35,8 +35,8 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=outlet-pw-2" in response.text
-    assert "Import destination" in response.text
+    assert "admin.js?v=template-library-1" in response.text
+    assert "Retained template" in response.text
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -539,6 +539,44 @@ def test_barcode_mapping_queue_tracks_real_aliases(tmp_path, monkeypatch):
     all_products = client.get("/admin/api/barcode-mapping/products?only_missing=false")
     assert all_products.status_code == 200
     assert all_products.json()["products"][0]["real_barcode_count"] == 1
+
+
+def test_procurewizard_raw_upload_reuses_and_archives_retained_template(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    client = TestClient(app)
+    database.init_db()
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+    payload = "\n".join(
+        [
+            "21041,928291,<-- Do not delete or edit,,,,,,,",
+            "PID,[E]Bin number,[E]Pos,Tertiary Category,Brand & Description,Pack Size,Est FC,Est SC,[E]Close FC,[E]Close SC",
+            "3862551,3862551,,Whiskey,Jack Daniels Rye,1 x 70 cl [1],0,0,,",
+        ]
+    ).encode("cp1252")
+
+    first = client.post(
+        "/admin/api/procurewizard/import-file?filename=first.csv",
+        content=payload,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    second = client.post(
+        "/admin/api/procurewizard/import-file?filename=renamed.csv",
+        content=payload,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["template_id"] == first.json()["template_id"]
+    assert second.json()["reused"] is True
+
+    template_id = first.json()["template_id"]
+    archived = client.post(f"/admin/api/procurewizard/templates/{template_id}/archive?archived=true")
+    assert archived.status_code == 200
+    templates = client.get("/admin/api/procurewizard/templates?include_archived=true").json()["templates"]
+    assert templates[0]["archived_at"]
 
 
 def test_barcode_mapping_recent_and_undo_alias(tmp_path, monkeypatch):

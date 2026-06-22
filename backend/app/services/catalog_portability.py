@@ -61,9 +61,8 @@ def catalog_summary(db: sqlite3.Connection) -> dict[str, int]:
             WHERE pb.product_id = products.id AND COALESCE(pb.label, '') != ?
           ) THEN 1 ELSE 0 END) AS unmapped_products,
           SUM(CASE WHEN EXISTS (
-            SELECT 1 FROM procurewizard_rows pwr
-            JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
-            WHERE pwr.product_id = products.id
+            SELECT 1 FROM procurewizard_row_mappings prm
+            WHERE prm.product_id = products.id
           ) THEN 1 ELSE 0 END) AS procurewizard_products
         FROM products
         """,
@@ -114,11 +113,11 @@ def _catalog_rows(db: sqlite3.Connection, mapped: bool | None = None) -> list[li
         )
         pw = db.execute(
             """
-            SELECT pwr.pid, pwr.bin_number, pwr.pack_size
-            FROM procurewizard_rows pwr
-            JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
-            WHERE pwr.product_id = ?
-            ORDER BY pwr.row_index
+            SELECT ptr.pid, ptr.bin_number, ptr.pack_size
+            FROM procurewizard_template_rows ptr
+            JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            WHERE prm.product_id = ?
+            ORDER BY ptr.row_index
             LIMIT 1
             """,
             (product["id"],),
@@ -176,6 +175,64 @@ def build_catalog_backup(db: sqlite3.Connection) -> bytes:
             "catalog/manifest.json",
             json.dumps({"format_version": 1, "created_at": now_iso(), "summary": catalog_summary(db)}, indent=2),
         )
+        templates = [
+            dict(row)
+            for row in db.execute(
+                """
+                SELECT id, filename, file_sha256, encoding, metadata_json, header_json,
+                       row_count, source_type, archived_at, created_at
+                FROM procurewizard_templates ORDER BY created_at
+                """
+            ).fetchall()
+        ]
+        mappings = [
+            dict(row)
+            for row in db.execute(
+                """
+                SELECT ptr.template_id, ptr.id AS row_id, ptr.row_index, ptr.pid,
+                       prm.product_id, prm.status, prm.score, prm.reason, prm.updated_at
+                FROM procurewizard_template_rows ptr
+                LEFT JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+                ORDER BY ptr.template_id, ptr.row_index
+                """
+            ).fetchall()
+        ]
+        archive.writestr("procurewizard/templates.json", json.dumps(templates, indent=2))
+        archive.writestr("procurewizard/row-mappings.json", json.dumps(mappings, indent=2))
+        archive.writestr(
+            "procurewizard/uploads.json",
+            json.dumps(
+                [dict(row) for row in db.execute("SELECT * FROM procurewizard_uploads ORDER BY uploaded_at").fetchall()],
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "procurewizard/export-runs.json",
+            json.dumps(
+                [
+                    dict(row)
+                    for row in db.execute(
+                        """
+                        SELECT id, template_id, session_id, location_id, warnings_json,
+                               warnings_acknowledged, output_sha256, filename, created_at
+                        FROM procurewizard_export_runs ORDER BY created_at
+                        """
+                    ).fetchall()
+                ],
+                indent=2,
+            ),
+        )
+        for run in db.execute(
+            "SELECT id, filename, output_bytes FROM procurewizard_export_runs WHERE output_bytes IS NOT NULL"
+        ).fetchall():
+            archive.writestr(f"procurewizard/exports/{run['id']}-{run['filename']}", run["output_bytes"])
+        for template in db.execute(
+            "SELECT id, filename, original_bytes FROM procurewizard_templates WHERE original_bytes IS NOT NULL"
+        ).fetchall():
+            archive.writestr(
+                f"procurewizard/templates/{template['id']}-{template['filename']}",
+                template["original_bytes"],
+            )
         image_dir = database.DATA_DIR / "product-images"
         if image_dir.exists():
             for path in sorted(image_dir.iterdir()):

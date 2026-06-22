@@ -71,13 +71,14 @@ def procurewizard_evidence(db: sqlite3.Connection, product_id: str | None) -> di
         return {}
     row = db.execute(
         """
-        SELECT pwr.id, pwr.pid, pwr.bin_number, pwr.pos, pwr.category, pwr.description,
-               pwr.pack_size, pwr.match_status, pwr.match_score, pwr.match_reason,
-               pwi.filename
-        FROM procurewizard_rows pwr
-        JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
-        WHERE pwr.product_id = ?
-        ORDER BY pwr.row_index
+        SELECT ptr.id, ptr.pid, ptr.bin_number, ptr.pos, ptr.category, ptr.description,
+               ptr.pack_size, prm.status AS match_status, prm.score AS match_score,
+               prm.reason AS match_reason, pwt.filename
+        FROM procurewizard_template_rows ptr
+        JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+        JOIN procurewizard_templates pwt ON pwt.id = ptr.template_id
+        WHERE prm.product_id = ?
+        ORDER BY pwt.archived_at IS NOT NULL, pwt.created_at DESC, ptr.row_index
         LIMIT 1
         """,
         (product_id,),

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from difflib import SequenceMatcher
@@ -114,26 +116,13 @@ def row_dict_from_csv(row: list[str]) -> dict[str, str]:
     }
 
 
-def product_id_for_pid(pid: str) -> str:
+def product_id_for_pid(pid: str, template_id: str = "") -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "-", normalize_identifier(pid))
-    return f"procurewizard-{safe}"
-
-
-def existing_product_for_pid(db: Connection, pid: str) -> str | None:
-    alias = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (pid,)).fetchone()
-    if alias:
-        return alias["product_id"]
-    row = db.execute("SELECT id FROM products WHERE id = ?", (product_id_for_pid(pid),)).fetchone()
-    if row:
-        return row["id"]
-    product = db.execute("SELECT id FROM products WHERE barcode = ?", (pid,)).fetchone()
-    return product["id"] if product else None
+    template_safe = re.sub(r"[^A-Za-z0-9_.-]", "-", normalize_identifier(template_id))
+    return f"procurewizard-{template_safe}-{safe}" if template_safe else f"procurewizard-{safe}"
 
 
 def best_catalog_match(db: Connection, row: dict[str, str]) -> tuple[str | None, float, str]:
-    by_pid = existing_product_for_pid(db, row["pid"])
-    if by_pid:
-        return by_pid, 1.0, "pid/barcode match"
     products = [
         dict(item)
         for item in db.execute(
@@ -153,8 +142,8 @@ def best_catalog_match(db: Connection, row: dict[str, str]) -> tuple[str | None,
             best_id = product["id"]
             best_score = score
             best_reason = reason
-    if best_id and best_score >= 0.82:
-        return best_id, best_score, best_reason
+    if best_id and best_score == 1:
+        return best_id, best_score, "exact name, size, and category match"
     return None, best_score, best_reason
 
 
@@ -166,21 +155,32 @@ def active_procurewizard_matches(
     require_name_tokens: bool = False,
     outlet_id: str = "cellar",
 ) -> list[dict[str, Any]]:
-    outlet_id = normalize_outlet_id(outlet_id)
     rows = db.execute(
         """
         SELECT pwr.id AS row_id, pwr.pid, pwr.bin_number, pwr.pos, pwr.category,
-               pwr.description, pwr.pack_size, pwr.product_id,
-               pwi.outlet_id,
+               pwr.description, pwr.pack_size, pwm.product_id,
+               pwt.id AS template_id, pwt.filename AS template_filename,
                p.id, p.barcode, p.bin, p.name, p.category AS product_category,
                p.size, p.unit, p.photo_url, p.notes, p.draft_status, p.product_updated_at
-        FROM procurewizard_rows pwr
-        JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
-        LEFT JOIN products p ON p.id = pwr.product_id
-        WHERE pwi.outlet_id = ?
-        """,
-        (outlet_id,),
+        FROM procurewizard_template_rows pwr
+        JOIN procurewizard_templates pwt ON pwt.id = pwr.template_id AND pwt.archived_at IS NULL
+        LEFT JOIN procurewizard_row_mappings pwm ON pwm.row_id = pwr.id
+        LEFT JOIN products p ON p.id = pwm.product_id
+        """
     ).fetchall()
+    if not rows:
+        rows = db.execute(
+            """
+            SELECT pwr.id AS row_id, pwr.pid, pwr.bin_number, pwr.pos, pwr.category,
+                   pwr.description, pwr.pack_size, pwr.product_id,
+                   pwi.id AS template_id, pwi.filename AS template_filename,
+                   p.id, p.barcode, p.bin, p.name, p.category AS product_category,
+                   p.size, p.unit, p.photo_url, p.notes, p.draft_status, p.product_updated_at
+            FROM procurewizard_rows pwr
+            JOIN procurewizard_imports pwi ON pwi.id = pwr.import_id AND pwi.active = 1
+            LEFT JOIN products p ON p.id = pwr.product_id
+            """
+        ).fetchall()
     matches: list[dict[str, Any]] = []
     product_name_tokens = set(normalize_match_text(product.get("name") or "").split())
     for item in rows:
@@ -193,7 +193,6 @@ def active_procurewizard_matches(
             {
                 "description": row["description"],
                 "pack_size": row["pack_size"],
-                "outlet_id": row["outlet_id"],
                 "category": row["category"],
             },
             product,
@@ -211,6 +210,8 @@ def active_procurewizard_matches(
                 "pack_size": row["pack_size"],
                 "score": score,
                 "reason": reason,
+                "template_id": row["template_id"],
+                "template_filename": row["template_filename"],
                 "product": {
                     "id": row["id"],
                     "barcode": row["barcode"],
@@ -230,18 +231,29 @@ def active_procurewizard_matches(
     return matches[: max(1, min(limit, 10))]
 
 
-def ensure_procurewizard_product(db: Connection, row: dict[str, str], current: str) -> str:
-    product_id = product_id_for_pid(row["pid"])
-    owner = existing_product_for_pid(db, row["pid"])
-    if owner and owner != product_id:
-        return owner
+def ensure_procurewizard_product(
+    db: Connection, row: dict[str, str], current: str, template_id: str = ""
+) -> str:
+    base_id = product_id_for_pid(row["pid"])
+    existing = db.execute(
+        "SELECT id, name, category, size FROM products WHERE id = ?",
+        (base_id,),
+    ).fetchone()
+    if existing and (
+        normalize_match_text(existing["name"]) != normalize_match_text(row["description"])
+        or normalize_match_text(existing["category"] or "") != normalize_match_text(row["category"])
+        or normalize_match_text(existing["size"] or "") != normalize_match_text(row["pack_size"])
+    ):
+        product_id = product_id_for_pid(row["pid"], template_id)
+    else:
+        product_id = base_id
     db.execute(
         """
         INSERT INTO products (
             id, barcode, bin, name, category, size, unit, photo_url, notes,
             draft_status, product_updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'case', '', 'Imported from ProcureWizard CSV', 'confirmed', ?)
+        VALUES (?, NULL, ?, ?, ?, ?, 'case', '', 'Imported from ProcureWizard CSV', 'confirmed', ?)
         ON CONFLICT(id) DO UPDATE SET
             bin = CASE
                 WHEN COALESCE(TRIM(products.bin), '') = '' THEN excluded.bin
@@ -254,20 +266,12 @@ def ensure_procurewizard_product(db: Connection, row: dict[str, str], current: s
         """,
         (
             product_id,
-            row["pid"],
             row["bin_number"],
             row["description"],
             row["category"],
             row["pack_size"],
             current,
         ),
-    )
-    db.execute(
-        """
-        INSERT OR IGNORE INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
-        VALUES (?, ?, 'ProcureWizard PID', 1, ?)
-        """,
-        (row["pid"], product_id, current),
     )
     return product_id
 
@@ -276,23 +280,63 @@ def normalize_outlet_id(outlet_id: str) -> str:
     return normalize_identifier(outlet_id) or "cellar"
 
 
-def import_procurewizard_csv(
+def import_procurewizard_csv_bytes(
     db: Connection,
     filename: str,
-    csv_text: str,
-    outlet_id: str = "cellar",
+    csv_bytes: bytes,
 ) -> dict[str, Any]:
-    parsed = parse_procurewizard_csv_text(csv_text)
+    parsed = parse_procurewizard_csv_bytes(csv_bytes)
     current = now_iso()
-    outlet_id = normalize_outlet_id(outlet_id)
-    import_id = f"pw-{outlet_id}-{re.sub(r'[^0-9]', '', current)[:20]}"
-    db.execute("UPDATE procurewizard_imports SET active = 0 WHERE outlet_id = ?", (outlet_id,))
+    file_sha256 = hashlib.sha256(csv_bytes).hexdigest()
+    existing = db.execute(
+        "SELECT * FROM procurewizard_templates WHERE file_sha256 = ?",
+        (file_sha256,),
+    ).fetchone()
+    if existing:
+        db.execute(
+            """
+            INSERT INTO procurewizard_uploads (template_id, filename, reused, uploaded_at)
+            VALUES (?, ?, 1, ?)
+            """,
+            (existing["id"], filename or existing["filename"], current),
+        )
+        db.commit()
+        return {
+            "template_id": existing["id"],
+            "import_id": existing["id"],
+            "filename": existing["filename"],
+            "row_count": existing["row_count"],
+            "reused": True,
+        }
+    import_id = f"pw-template-{uuid.uuid4().hex[:20]}"
+    db.execute(
+        """
+        INSERT INTO procurewizard_templates (
+            id, filename, original_bytes, file_sha256, encoding, metadata_json,
+            header_json, row_count, source_type, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'upload', ?)
+        """,
+        (
+            import_id, filename or "procurewizard.csv", csv_bytes, file_sha256, parsed.encoding,
+            json.dumps(parsed.metadata, separators=(",", ":")),
+            json.dumps(parsed.header, separators=(",", ":")), len(parsed.rows), current,
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO procurewizard_uploads (template_id, filename, reused, uploaded_at)
+        VALUES (?, ?, 0, ?)
+        """,
+        (import_id, filename or "procurewizard.csv", current),
+    )
+    # Keep legacy tables populated while older catalog and AI views are migrated.
+    db.execute("UPDATE procurewizard_imports SET active = 0")
     db.execute(
         """
         INSERT INTO procurewizard_imports (
             id, filename, encoding, metadata_json, header_json, row_count, active, created_at, outlet_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'cellar')
         """,
         (
             import_id,
@@ -302,7 +346,6 @@ def import_procurewizard_csv(
             json.dumps(parsed.header, separators=(",", ":")),
             len(parsed.rows),
             current,
-            outlet_id,
         ),
     )
     matched = 0
@@ -311,13 +354,12 @@ def import_procurewizard_csv(
     for index, csv_row in enumerate(parsed.rows, start=2):
         row = row_dict_from_csv(csv_row)
         product_id, score, reason = best_catalog_match(db, row)
-        status = "matched"
+        status = "exact"
         if product_id:
             matched += 1
         else:
-            product_id = ensure_procurewizard_product(db, row, current)
-            score = 1.0
-            reason = "imported as catalog product"
+            product_id = ensure_procurewizard_product(db, row, current, import_id)
+            reason = f"imported as catalog product; fuzzy suggestion score={score:.4f}"
             status = "imported"
             imported += 1
         raw = list(csv_row)
@@ -353,55 +395,120 @@ def import_procurewizard_csv(
                 current,
             ),
         )
+        db.execute(
+            """
+            INSERT INTO procurewizard_template_rows (
+                id, template_id, row_index, pid, bin_number, pos, category, description,
+                pack_size, est_fc, est_sc, close_fc, close_sc, raw_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"{import_id}-{index}", import_id, index, row["pid"], row["bin_number"],
+                row["pos"], row["category"], row["description"], row["pack_size"],
+                row["est_fc"], row["est_sc"], row["close_fc"], row["close_sc"],
+                json.dumps(raw, separators=(",", ":")), current,
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO procurewizard_row_mappings (row_id, product_id, status, score, reason, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (f"{import_id}-{index}", product_id, status, score, reason, current),
+        )
     db.commit()
     return {
         "import_id": import_id,
         "filename": filename,
-        "outlet_id": outlet_id,
+        "template_id": import_id,
         "row_count": len(parsed.rows),
         "matched_count": matched,
         "imported_count": imported,
         "unmatched_count": unmatched,
+        "reused": False,
     }
 
 
+def import_procurewizard_csv(
+    db: Connection,
+    filename: str,
+    csv_text: str,
+    outlet_id: str = "cellar",
+) -> dict[str, Any]:
+    return import_procurewizard_csv_bytes(db, filename, csv_text.encode("cp1252", errors="replace"))
+
+
+def template_library(db: Connection, include_archived: bool = False) -> list[dict[str, Any]]:
+    archived_filter = "" if include_archived else "WHERE pwt.archived_at IS NULL"
+    return [
+        dict(row)
+        for row in db.execute(
+            f"""
+            SELECT pwt.*,
+                   COUNT(DISTINCT ptr.id) AS parsed_rows,
+                   SUM(CASE WHEN prm.product_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_rows,
+                   COUNT(DISTINCT pwu.id) AS upload_count,
+                   MAX(pwu.uploaded_at) AS last_uploaded_at
+            FROM procurewizard_templates pwt
+            LEFT JOIN procurewizard_template_rows ptr ON ptr.template_id = pwt.id
+            LEFT JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            LEFT JOIN procurewizard_uploads pwu ON pwu.template_id = pwt.id
+            {archived_filter}
+            GROUP BY pwt.id
+            ORDER BY pwt.archived_at IS NOT NULL, pwt.created_at DESC
+            """
+        ).fetchall()
+    ]
+
+
+def set_template_archived(db: Connection, template_id: str, archived: bool) -> dict[str, Any]:
+    value = now_iso() if archived else None
+    result = db.execute(
+        "UPDATE procurewizard_templates SET archived_at = ? WHERE id = ?",
+        (value, template_id),
+    )
+    if not result.rowcount:
+        raise ValueError("ProcureWizard template not found")
+    db.commit()
+    return {"template_id": template_id, "archived": archived}
+
+
 def active_import(db: Connection, outlet_id: str = "cellar") -> dict[str, Any] | None:
-    outlet_id = normalize_outlet_id(outlet_id)
     row = db.execute(
         """
-        SELECT * FROM procurewizard_imports
-        WHERE active = 1 AND outlet_id = ?
+        SELECT * FROM procurewizard_templates
+        WHERE archived_at IS NULL
         ORDER BY created_at DESC LIMIT 1
-        """,
-        (outlet_id,),
+        """
     ).fetchone()
     return dict(row) if row else None
 
 
-def import_summary(db: Connection, session_id: str = "", outlet_id: str = "cellar") -> dict[str, Any]:
+def import_summary(
+    db: Connection,
+    session_id: str = "",
+    outlet_id: str = "cellar",
+    template_id: str = "",
+) -> dict[str, Any]:
     outlet_id = normalize_outlet_id(outlet_id)
-    active = active_import(db, outlet_id)
-    active_outlets = [
-        dict(row)
-        for row in db.execute(
-            """
-            SELECT outlet_id, filename, row_count, created_at
-            FROM procurewizard_imports
-            WHERE active = 1
-            ORDER BY outlet_id
-            """
-        ).fetchall()
-    ]
+    active = (
+        db.execute("SELECT * FROM procurewizard_templates WHERE id = ?", (template_id,)).fetchone()
+        if template_id
+        else active_import(db)
+    )
+    templates = template_library(db, include_archived=True)
     if not active:
-        return {"active": None, "active_outlets": active_outlets, "outlet_id": outlet_id, "rows": [], "counts": {}, "session": {}}
+        return {"active": None, "templates": templates, "outlet_id": outlet_id, "rows": [], "counts": {}, "session": {}, "warnings": []}
+    active = dict(active)
     counts = {
-        row["match_status"]: row["c"]
+        row["status"]: row["c"]
         for row in db.execute(
             """
-            SELECT match_status, COUNT(*) AS c
-            FROM procurewizard_rows
-            WHERE import_id = ?
-            GROUP BY match_status
+            SELECT prm.status, COUNT(*) AS c
+            FROM procurewizard_template_rows ptr
+            LEFT JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            WHERE ptr.template_id = ?
+            GROUP BY prm.status
             """,
             (active["id"],),
         ).fetchall()
@@ -434,8 +541,9 @@ def import_summary(db: Connection, session_id: str = "", outlet_id: str = "cella
             FROM stocktake_lines sl
             WHERE sl.session_id = ? AND sl.location_id = ?
               AND EXISTS (
-                SELECT 1 FROM procurewizard_rows pwr
-                WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
+                SELECT 1 FROM procurewizard_template_rows ptr
+                JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+                WHERE ptr.template_id = ? AND prm.product_id = sl.product_id
               )
             """,
             (session_id, outlet_id, active["id"]),
@@ -447,8 +555,9 @@ def import_summary(db: Connection, session_id: str = "", outlet_id: str = "cella
             FROM stocktake_lines sl
             WHERE sl.session_id = ? AND sl.location_id = ?
               AND NOT EXISTS (
-                SELECT 1 FROM procurewizard_rows pwr
-                WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
+                SELECT 1 FROM procurewizard_template_rows ptr
+                JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+                WHERE ptr.template_id = ? AND prm.product_id = sl.product_id
               )
             """,
             (session_id, outlet_id, active["id"]),
@@ -464,8 +573,9 @@ def import_summary(db: Connection, session_id: str = "", outlet_id: str = "cella
                 LEFT JOIN products p ON p.id = sl.product_id
                 WHERE sl.session_id = ? AND sl.location_id = ?
                   AND NOT EXISTS (
-                    SELECT 1 FROM procurewizard_rows pwr
-                    WHERE pwr.import_id = ? AND pwr.product_id = sl.product_id
+                    SELECT 1 FROM procurewizard_template_rows ptr
+                    JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+                    WHERE ptr.template_id = ? AND prm.product_id = sl.product_id
                   )
                 GROUP BY sl.product_id, product_name, barcode
                 ORDER BY quantity_total DESC, product_name
@@ -490,75 +600,118 @@ def import_summary(db: Connection, session_id: str = "", outlet_id: str = "cella
         dict(row)
         for row in db.execute(
             f"""
-            SELECT pwr.*, p.name AS product_name, p.barcode AS product_barcode,
+            SELECT ptr.*, prm.product_id, prm.status AS match_status, prm.score AS match_score,
+                   prm.reason AS match_reason, p.name AS product_name, p.barcode AS product_barcode,
                    COALESCE((
                      SELECT SUM(CAST(sl.quantity_decimal AS REAL))
                      FROM stocktake_lines sl
-                     WHERE sl.session_id = ? AND sl.location_id = ? AND sl.product_id = pwr.product_id
+                     WHERE sl.session_id = ? AND sl.location_id = ? AND sl.product_id = prm.product_id
                    ), 0) AS counted_quantity
-            FROM procurewizard_rows pwr
-            LEFT JOIN products p ON p.id = pwr.product_id
-            WHERE pwr.import_id = ?
+            FROM procurewizard_template_rows ptr
+            LEFT JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            LEFT JOIN products p ON p.id = prm.product_id
+            WHERE ptr.template_id = ?
             ORDER BY CASE WHEN counted_quantity > 0 THEN 0 ELSE 1 END,
-                     CASE pwr.match_status WHEN 'unmatched' THEN 0 WHEN 'matched' THEN 1 ELSE 2 END,
-                     pwr.match_score ASC, pwr.row_index ASC
-            LIMIT 100
+                     CASE prm.status WHEN 'unmatched' THEN 0 WHEN 'exact' THEN 1 ELSE 2 END,
+                     prm.score ASC, ptr.row_index ASC
+            LIMIT 500
             """,
             (session_id, outlet_id, active["id"]),
         ).fetchall()
     ]
+    duplicate_mappings = [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT prm.product_id, p.name AS product_name, COUNT(*) AS row_count
+            FROM procurewizard_template_rows ptr
+            JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+            LEFT JOIN products p ON p.id = prm.product_id
+            WHERE ptr.template_id = ? AND prm.product_id IS NOT NULL
+            GROUP BY prm.product_id
+            HAVING COUNT(*) > 1
+            ORDER BY row_count DESC, product_name
+            """,
+            (active["id"],),
+        ).fetchall()
+    ]
+    warnings = []
+    if session["unmapped_product_count"]:
+        warnings.append(f"{session['unmapped_product_count']} counted products are not mapped to this template.")
+    if duplicate_mappings:
+        warnings.append(f"{len(duplicate_mappings)} products map to multiple rows and will receive duplicate counts.")
+    export_runs = [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT id, template_id, session_id, location_id, warnings_json,
+                   warnings_acknowledged, output_sha256, filename, created_at
+            FROM procurewizard_export_runs
+            WHERE template_id = ? AND session_id = ? AND location_id = ?
+            ORDER BY created_at DESC LIMIT 10
+            """,
+            (active["id"], session_id, outlet_id),
+        ).fetchall()
+    ] if session_id else []
     return {
         "active": active,
-        "active_outlets": active_outlets,
+        "templates": templates,
         "outlet_id": outlet_id,
         "rows": rows,
         "counts": counts,
         "session": session,
+        "duplicate_mappings": duplicate_mappings,
+        "warnings": warnings,
+        "export_runs": export_runs,
     }
 
 
 def link_procurewizard_row(db: Connection, row_id: str, product_id: str | None) -> dict[str, Any]:
     current = now_iso()
-    row = db.execute("SELECT pid, product_id FROM procurewizard_rows WHERE id = ?", (row_id,)).fetchone()
+    row = db.execute(
+        """
+        SELECT ptr.pid, prm.product_id
+        FROM procurewizard_template_rows ptr
+        LEFT JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+        WHERE ptr.id = ?
+        """,
+        (row_id,),
+    ).fetchone()
     if not row:
         raise ValueError("ProcureWizard row not found")
     if product_id:
         product = db.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
         if not product:
             raise ValueError("Product not found")
-        owner = db.execute("SELECT product_id FROM product_barcodes WHERE barcode = ?", (row["pid"],)).fetchone()
-        owner_is_generated_pw = bool(owner and owner["product_id"] == row["product_id"] and str(owner["product_id"]).startswith("procurewizard-"))
-        if owner and owner["product_id"] != product_id and not owner_is_generated_pw:
-            raise ValueError("ProcureWizard PID already belongs to another product")
     result = db.execute(
         """
-        UPDATE procurewizard_rows
-        SET product_id = ?, match_status = ?, match_score = ?, match_reason = ?, updated_at = ?
-        WHERE id = ?
+        INSERT INTO procurewizard_row_mappings (row_id, product_id, status, score, reason, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(row_id) DO UPDATE SET
+            product_id = excluded.product_id,
+            status = excluded.status,
+            score = excluded.score,
+            reason = excluded.reason,
+            updated_at = excluded.updated_at
         """,
         (
+            row_id,
             product_id,
             "manual" if product_id else "unmatched",
             1.0 if product_id else 0,
             "manual admin link" if product_id else "manual unlink",
             current,
-            row_id,
         ),
     )
-    if result.rowcount == 0:
-        raise ValueError("ProcureWizard row not found")
-    if product_id:
-        db.execute(
-            """
-            INSERT INTO product_barcodes (barcode, product_id, label, is_primary, created_at)
-            VALUES (?, ?, 'ProcureWizard PID', 0, ?)
-            ON CONFLICT(barcode) DO UPDATE SET
-                product_id = excluded.product_id,
-                is_primary = 0,
-                label = 'ProcureWizard PID'
-            """,
-            (row["pid"], product_id, current),
-        )
+    db.execute(
+        """
+        UPDATE procurewizard_rows
+        SET product_id = ?, match_status = ?, match_score = ?, match_reason = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (product_id, "manual" if product_id else "unmatched", 1.0 if product_id else 0,
+         "manual admin link" if product_id else "manual unlink", current, row_id),
+    )
     db.commit()
     return {"row_id": row_id, "product_id": product_id, "status": "linked" if product_id else "unlinked"}
 
@@ -574,8 +727,8 @@ def counted_quantities_by_product(
     db: Connection,
     session_id: str,
     outlet_id: str | None = None,
-) -> dict[str, dict[str, Decimal]]:
-    totals: dict[str, dict[str, Decimal]] = {}
+) -> dict[str, dict[str, Any]]:
+    totals: dict[str, dict[str, Any]] = {}
     rows = db.execute(
         """
         SELECT product_id, quantity_decimal, COALESCE(case_type, 'split') AS case_type
@@ -590,9 +743,13 @@ def counted_quantities_by_product(
             quantity = Decimal(str(row["quantity_decimal"] or "0"))
         except Exception:
             quantity = Decimal("0")
-        product_totals = totals.setdefault(row["product_id"], {"full": Decimal("0"), "split": Decimal("0")})
+        product_totals = totals.setdefault(
+            row["product_id"],
+            {"full": Decimal("0"), "split": Decimal("0"), "full_counted": False, "split_counted": False},
+        )
         case_type = row["case_type"] if row["case_type"] in {"full", "split"} else "split"
         product_totals[case_type] += quantity
+        product_totals[f"{case_type}_counted"] = True
     return totals
 
 
@@ -600,17 +757,25 @@ def build_procurewizard_csv(
     db: Connection,
     session_id: str,
     outlet_id: str = "cellar",
+    template_id: str = "",
+    warnings_acknowledged: bool = False,
 ) -> tuple[str, bytes]:
     outlet_id = normalize_outlet_id(outlet_id)
-    active = active_import(db, outlet_id)
+    active = (
+        db.execute("SELECT * FROM procurewizard_templates WHERE id = ?", (template_id,)).fetchone()
+        if template_id
+        else active_import(db)
+    )
     if not active:
-        raise ValueError(f"No active ProcureWizard import found for outlet {outlet_id}.")
+        raise ValueError("No ProcureWizard template selected.")
+    active = dict(active)
     totals = counted_quantities_by_product(db, session_id, outlet_id)
     mapped_product_count = db.execute(
         """
-        SELECT COUNT(DISTINCT product_id) AS c
-        FROM procurewizard_rows
-        WHERE import_id = ? AND product_id IN (
+        SELECT COUNT(DISTINCT prm.product_id) AS c
+        FROM procurewizard_template_rows ptr
+        JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+        WHERE ptr.template_id = ? AND prm.product_id IN (
           SELECT DISTINCT product_id FROM stocktake_lines WHERE session_id = ? AND location_id = ?
         )
         """,
@@ -620,28 +785,54 @@ def build_procurewizard_csv(
         raise ValueError(
             "This session has no ProcureWizard-linked counted products. Download All Scanned Lines instead or map products first."
         )
+    summary = import_summary(db, session_id, outlet_id, active["id"])
+    if summary["warnings"] and not warnings_acknowledged:
+        raise ValueError("Export has warnings. Review them and explicitly acknowledge before downloading.")
     output_rows: list[list[str]] = [
         json.loads(active["metadata_json"]),
         json.loads(active["header_json"]),
     ]
     for row in db.execute(
         """
-        SELECT *
-        FROM procurewizard_rows
-        WHERE import_id = ?
-        ORDER BY row_index
+        SELECT ptr.*, prm.product_id
+        FROM procurewizard_template_rows ptr
+        LEFT JOIN procurewizard_row_mappings prm ON prm.row_id = ptr.id
+        WHERE ptr.template_id = ?
+        ORDER BY ptr.row_index
         """,
         (active["id"],),
     ).fetchall():
         raw = json.loads(row["raw_json"])
+        raw[8] = ""
+        raw[9] = ""
         if row["product_id"] in totals:
             full = totals[row["product_id"]]["full"]
             split = totals[row["product_id"]]["split"]
-            raw[8] = format_decimal(full) if full else ""
-            raw[9] = format_decimal(split) if split else ""
+            raw[8] = format_decimal(full) if totals[row["product_id"]]["full_counted"] else ""
+            raw[9] = format_decimal(split) if totals[row["product_id"]]["split_counted"] else ""
         output_rows.append(raw)
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerows(output_rows)
-    filename = f"procurewizard-{outlet_id}-{session_id}.csv"
-    return filename, stream.getvalue().encode("cp1252", errors="replace")
+    filename = f"procurewizard-{outlet_id}-{session_id}-{active['id']}.csv"
+    payload = stream.getvalue().encode(active["encoding"] if active["encoding"] != "text" else "cp1252", errors="replace")
+    if (
+        db.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        and db.execute("SELECT 1 FROM locations WHERE id = ?", (outlet_id,)).fetchone()
+    ):
+        db.execute(
+            """
+            INSERT INTO procurewizard_export_runs (
+                id, template_id, session_id, location_id, warnings_json,
+                warnings_acknowledged, output_sha256, output_bytes, filename, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"pw-export-{uuid.uuid4().hex}", active["id"], session_id, outlet_id,
+                json.dumps(summary["warnings"], separators=(",", ":")),
+                1 if warnings_acknowledged else 0, hashlib.sha256(payload).hexdigest(),
+                payload, filename, now_iso(),
+            ),
+        )
+    db.commit()
+    return filename, payload
