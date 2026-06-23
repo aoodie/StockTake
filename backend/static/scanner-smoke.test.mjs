@@ -7,25 +7,29 @@ const appSource = await readFile(new URL("./app.js", import.meta.url), "utf8");
 const require = createRequire(import.meta.url);
 const ZXing = require("./vendor/zxing-library.min.js");
 
-test("main scanner uses ZXing's supported video-element decode loop", () => {
+test("main scanner uses native first with rotated ZXing fallback", () => {
   assert.match(appSource, /runZxingVideoLoop/);
-  assert.match(appSource, /reader\.decodeFromVideoElementContinuously\(els\.preview/);
+  assert.match(appSource, /decodeZxingFrame/);
+  assert.match(appSource, /drawZxingFrame/);
+  assert.match(appSource, /HTMLCanvasElementLuminanceSource/);
+  assert.match(appSource, /DecodeHintType\?\.TRY_HARDER/);
+  assert.match(appSource, /const nativeStarted = await startNativeScanLoop\(generation\)/);
+  assert.match(appSource, /const zxingStarted = nativeStarted \? false : await startZxingScanLoop\(generation\)/);
   assert.doesNotMatch(appSource, /decodeFromConstraints/);
-  assert.doesNotMatch(appSource, /reader\.decode\(els\.preview\)/);
   assert.doesNotMatch(appSource, /decodeFromImageElement/);
   assert.doesNotMatch(appSource, /runZxingRoiLoop/);
 });
 
-test("bundled ZXing exposes the video-element decoder used by the scanner", () => {
+test("bundled ZXing exposes the canvas bitmap decoder used by the scanner", () => {
   const reader = new ZXing.BrowserMultiFormatReader();
-  assert.equal(typeof reader.decodeFromVideoElementContinuously, "function");
-  assert.equal(typeof reader.stopContinuousDecode, "function");
+  assert.equal(typeof reader.createBinaryBitmap, "function");
+  assert.equal(typeof reader.decodeBitmap, "function");
   assert.equal(typeof reader.reset, "function");
 });
 
 test("scanner build cache is bumped for scanner recovery", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-1/);
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-2/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-2/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);

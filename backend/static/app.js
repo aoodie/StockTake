@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-1";
+} from "./frontend-utils.js?v=scanner-recovery-2";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -1617,8 +1617,8 @@ async function startScanLoop() {
   const generation = state.decoderGeneration;
   state.scanLoopActive = true;
   updateDiagnostics({ scanner_generation: String(generation) });
-  const zxingStarted = await startZxingScanLoop(generation);
-  const nativeStarted = zxingStarted ? false : await startNativeScanLoop(generation);
+  const nativeStarted = await startNativeScanLoop(generation);
+  const zxingStarted = nativeStarted ? false : await startZxingScanLoop(generation);
 
   if (nativeStarted || zxingStarted) {
     const decoders = zxingStarted ? "ZXing video" : "Native";
@@ -1647,7 +1647,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-1";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-2";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -1674,7 +1674,8 @@ function loadZxingScript() {
 function zxingMethodSummary(reader) {
   return [
     typeof reader.decode === "function" ? "low-level-decode" : "",
-    typeof reader.decodeFromVideoElementContinuously === "function" ? "library-continuous" : ""
+    typeof reader.createBinaryBitmap === "function" ? "canvas-bitmap" : "",
+    typeof reader.decodeBitmap === "function" ? "rotated-bitmap" : ""
   ].filter(Boolean).join(", ") || "none";
 }
 
@@ -1686,6 +1687,9 @@ function makeZxingReader(zxing) {
   if (zxing.DecodeHintType?.POSSIBLE_FORMATS) {
     hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, formats);
   }
+  if (zxing.DecodeHintType?.TRY_HARDER) {
+    hints.set(zxing.DecodeHintType.TRY_HARDER, true);
+  }
   const reader = new zxing.BrowserMultiFormatReader(hints, ZXING_DETECT_INTERVAL_MS);
   updateDiagnostics({ zxing_methods: zxingMethodSummary(reader) });
   return reader;
@@ -1696,8 +1700,11 @@ async function startZxingScanLoop(generation = state.decoderGeneration) {
   if (generation !== state.decoderGeneration || !state.scanLoopActive) return false;
   if (zxing?.BrowserMultiFormatReader) {
     state.zxingReader = makeZxingReader(zxing);
-    if (typeof state.zxingReader.decodeFromVideoElementContinuously !== "function") {
-      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing video decoder unavailable" });
+    if (
+      typeof state.zxingReader.createBinaryBitmap !== "function" ||
+      typeof state.zxingReader.decodeBitmap !== "function"
+    ) {
+      updateDiagnostics({ zxing_loader: "missing", last_error: "ZXing rotated decoder unavailable" });
       state.zxingReader = null;
       return false;
     }
@@ -1743,35 +1750,118 @@ function isExpectedZxingMiss(error) {
   ].some((ErrorType) => ErrorType && error instanceof ErrorType);
 }
 
-function runZxingVideoLoop(reader, generation) {
-  updateDiagnostics({ roi_size: "full video", decoder_heartbeat: "starting library video loop" });
-  reader.decodeFromVideoElementContinuously(els.preview, (result, error) => {
-    if (!decoderIsCurrent(generation, reader)) return;
+function zxingFrameCanvas(width, height, rotations) {
+  const key = `${rotations}:${width}x${height}`;
+  const cache = zxingFrameCanvas.cache || new Map();
+  zxingFrameCanvas.cache = cache;
+  let canvas = cache.get(key);
+  if (!canvas) {
+    canvas = document.createElement("canvas");
+    cache.set(key, canvas);
+  }
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  return canvas;
+}
+
+function drawZxingFrame(rotations) {
+  const sourceWidth = els.preview.videoWidth;
+  const sourceHeight = els.preview.videoHeight;
+  if (!sourceWidth || !sourceHeight) return null;
+  rotations = ((rotations % 4) + 4) % 4;
+  const rotated = rotations % 2 === 1;
+  const width = rotated ? sourceHeight : sourceWidth;
+  const height = rotated ? sourceWidth : sourceHeight;
+  const canvas = zxingFrameCanvas(width, height, rotations);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, width, height);
+  if (rotations === 1) {
+    context.translate(0, height);
+    context.rotate(-Math.PI / 2);
+  } else if (rotations === 2) {
+    context.translate(width, height);
+    context.rotate(Math.PI);
+  } else if (rotations === 3) {
+    context.translate(width, 0);
+    context.rotate(Math.PI / 2);
+  }
+  context.drawImage(els.preview, 0, 0, sourceWidth, sourceHeight);
+  return canvas;
+}
+
+function decodeZxingRotation(reader, rotations) {
+  const canvas = drawZxingFrame(rotations);
+  const zxing = currentZxing();
+  if (!canvas || !zxing?.HTMLCanvasElementLuminanceSource || !zxing?.HybridBinarizer || !zxing?.BinaryBitmap) {
+    throw new Error("ZXing canvas decode unavailable");
+  }
+  const source = new zxing.HTMLCanvasElementLuminanceSource(canvas);
+  const bitmap = new zxing.BinaryBitmap(new zxing.HybridBinarizer(source));
+  return reader.decodeBitmap(bitmap);
+}
+
+function decodeZxingFrame(reader) {
+  const attempts = [
+    ["upright", 0],
+    ["rotated-left", 1],
+    ["upside-down", 2],
+    ["rotated-right", 3]
+  ];
+  let lastExpectedError = null;
+  for (const [orientation, rotations] of attempts) {
+    try {
+      return { result: decodeZxingRotation(reader, rotations), orientation };
+    } catch (error) {
+      if (!isExpectedZxingMiss(error)) throw error;
+      lastExpectedError = error;
+    }
+  }
+  throw lastExpectedError || new Error("No barcode found");
+}
+
+async function runZxingVideoLoop(reader, generation) {
+  updateDiagnostics({ roi_size: "full video + 90deg fallback", decoder_heartbeat: "starting rotated ZXing loop" });
+  while (decoderIsCurrent(generation, reader)) {
     if (shouldSkipDecode()) {
       state.framesSkipped += 1;
       updateDiagnostics({ frames_skipped: String(state.framesSkipped) });
-      return;
+      await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
+      continue;
     }
-    updateDiagnostics({ decoder_heartbeat: new Date().toLocaleTimeString(), decoder_blocked: "-" });
-    const barcode = decodedBarcodeText(result);
-    if (barcode) {
-      updateDiagnostics({ last_raw_barcode: barcode });
-      const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
-      state.barcodeCandidate = decision.candidate;
-      if (decision.confirmed) {
-        state.barcodeCandidate = null;
-        void handleScan(barcode);
-      }
-      return;
-    }
-    if (error && !isExpectedZxingMiss(error)) {
-      state.decodeErrors += 1;
+    const startedAt = performance.now();
+    try {
+      const { result, orientation } = decodeZxingFrame(reader);
+      if (!decoderIsCurrent(generation, reader)) break;
+      recordDecodeDuration(startedAt);
       updateDiagnostics({
-        decode_errors: String(state.decodeErrors),
-        last_error: `decode frame: ${error?.name || error?.message || "failed"}`
+        decoder_heartbeat: new Date().toLocaleTimeString(),
+        decoder_blocked: "-",
+        roi_size: `full video ${orientation}`
       });
+      const barcode = decodedBarcodeText(result);
+      if (barcode) {
+        updateDiagnostics({ last_raw_barcode: barcode });
+        const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+        state.barcodeCandidate = decision.candidate;
+        if (decision.confirmed) {
+          state.barcodeCandidate = null;
+          await handleScan(barcode);
+        }
+      }
+    } catch (error) {
+      if (!isExpectedZxingMiss(error)) {
+        state.decodeErrors += 1;
+        updateDiagnostics({
+          decode_errors: String(state.decodeErrors),
+          last_error: `decode frame: ${error?.name || error?.message || "failed"}`
+        });
+      }
     }
-  });
+    await new Promise((resolve) => setTimeout(resolve, ZXING_DETECT_INTERVAL_MS));
+  }
 }
 
 async function startNativeScanLoop(generation = state.decoderGeneration) {
