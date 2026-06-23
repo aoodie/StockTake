@@ -15,3 +15,14 @@ test("Scan Next is the only page-level reset action", () => {
   assert.doesNotMatch(mappingHtml, /id="mappingClear"/);
   assert.match(mappingSource, /els\.scanNext\.addEventListener\("click", \(\) => resetForNext\(true\)\)/);
 });
+
+test("mapping scanner uses the same rotated ZXing fallback as the phone scanner", () => {
+  assert.match(mappingSource, /startNativeLoop/);
+  assert.match(mappingSource, /startZxingLoop\(generation\)/);
+  assert.match(mappingSource, /decodeZxingFrame/);
+  assert.match(mappingSource, /drawZxingFrame/);
+  assert.match(mappingSource, /HTMLCanvasElementLuminanceSource/);
+  assert.match(mappingSource, /DecodeHintType\?\.TRY_HARDER/);
+  assert.match(mappingSource, /scanner-recovery-3/);
+  assert.doesNotMatch(mappingSource, /decodeFromVideoElementContinuously\(els\.preview/);
+});

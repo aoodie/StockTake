@@ -7,7 +7,7 @@ import {
   confirmBarcodeCandidate,
   decodedBarcodeText,
   normalizeBarcode
-} from "./frontend-utils.js?v=scanner-recovery-2";
+} from "./frontend-utils.js?v=scanner-recovery-3";
 
 const els = {
   loginView: document.querySelector("#mappingLoginView"),
@@ -51,10 +51,12 @@ const state = {
   detector: null,
   zxingReader: null,
   scanning: false,
+  scanGeneration: 0,
   scanInFlight: false,
   lastBarcode: "",
   lastScanAt: 0,
   barcodeCandidate: null,
+  nativeErrorStreak: 0,
   currentBarcode: "",
   currentSuggestion: {},
   scanLocked: false,
@@ -480,19 +482,16 @@ async function startCamera() {
     els.preview.srcObject = state.stream;
     await els.preview.play();
     state.scanning = true;
+    state.scanGeneration += 1;
     setStatus("Scanning", "ok");
-    if ("BarcodeDetector" in window) {
-      state.detector = new BarcodeDetector({ formats: BARCODE_FORMATS });
-      runNativeLoop();
-    } else {
-      startZxingLoop();
-    }
+    await startScanLoop(state.scanGeneration);
   } catch (err) {
     setStatus(`Camera blocked: ${err.name || "denied"}`, "error");
   }
 }
 
 function stopCamera() {
+  state.scanGeneration += 1;
   state.scanning = false;
   state.detector = null;
   state.zxingReader?.reset?.();
@@ -501,30 +500,162 @@ function stopCamera() {
   state.stream = null;
 }
 
-async function runNativeLoop() {
-  while (state.scanning && state.detector) {
+async function startScanLoop(generation) {
+  const nativeStarted = await startNativeLoop(generation);
+  if (nativeStarted) {
+    setStatus("Scanning: native", "ok");
+    return;
+  }
+  const zxingStarted = startZxingLoop(generation);
+  setStatus(zxingStarted ? "Scanning: rotated fallback" : "Scanner unavailable", zxingStarted ? "ok" : "error");
+}
+
+async function startNativeLoop(generation) {
+  if (!("BarcodeDetector" in window)) return false;
+  const supportedFormats = await BarcodeDetector.getSupportedFormats?.().catch(() => []) || [];
+  const formats = BARCODE_FORMATS.filter((format) => supportedFormats.length === 0 || supportedFormats.includes(format));
+  if (!formats.length || generation !== state.scanGeneration || !state.scanning) return false;
+  try {
+    state.detector = new BarcodeDetector({ formats });
+  } catch {
+    return false;
+  }
+  state.nativeErrorStreak = 0;
+  runNativeLoop(state.detector, generation);
+  return true;
+}
+
+function scannerReady() {
+  return !state.scanInFlight && !state.scanLocked && els.preview.readyState >= 2;
+}
+
+async function runNativeLoop(detector, generation) {
+  let emptyFrames = 0;
+  while (state.scanning && generation === state.scanGeneration && detector === state.detector) {
     try {
-      if (!state.scanInFlight && !state.scanLocked && els.preview.readyState >= 2) {
-        const codes = await state.detector.detect(els.preview);
+      if (scannerReady()) {
+        const codes = await detector.detect(els.preview);
         const barcode = decodedBarcodeText(codes[0]);
-        const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
-        state.barcodeCandidate = decision.candidate;
-        if (decision.confirmed) {
-          state.barcodeCandidate = null;
-          await lookupBarcode(barcode);
+        state.nativeErrorStreak = 0;
+        if (barcode) {
+          emptyFrames = 0;
+          const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+          state.barcodeCandidate = decision.candidate;
+          if (decision.confirmed) {
+            state.barcodeCandidate = null;
+            await lookupBarcode(barcode);
+          }
+        } else {
+          emptyFrames += 1;
+          if (emptyFrames >= 45) {
+            state.detector = null;
+            const fallbackStarted = startZxingLoop(generation);
+            setStatus(fallbackStarted ? "Scanning: rotated fallback" : "Scanner unavailable", fallbackStarted ? "ok" : "error");
+            break;
+          }
         }
       }
     } catch {
+      state.nativeErrorStreak += 1;
+      if (state.nativeErrorStreak >= 8) {
+        state.detector = null;
+        const fallbackStarted = startZxingLoop(generation);
+        setStatus(fallbackStarted ? "Scanning: rotated fallback" : "Scanner unavailable", fallbackStarted ? "ok" : "error");
+        break;
+      }
       // Camera frames can fail while focus/exposure settles.
     }
     await new Promise((resolve) => setTimeout(resolve, CAMERA_DETECT_INTERVAL_MS));
   }
 }
 
-function startZxingLoop() {
+function isExpectedZxingMiss(error) {
+  return [
+    window.ZXing?.NotFoundException,
+    window.ZXing?.ChecksumException,
+    window.ZXing?.FormatException
+  ].some((ErrorType) => ErrorType && error instanceof ErrorType);
+}
+
+function zxingFrameCanvas(width, height, rotations) {
+  const key = `${rotations}:${width}x${height}`;
+  const cache = zxingFrameCanvas.cache || new Map();
+  zxingFrameCanvas.cache = cache;
+  let canvas = cache.get(key);
+  if (!canvas) {
+    canvas = document.createElement("canvas");
+    cache.set(key, canvas);
+  }
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  return canvas;
+}
+
+function drawZxingFrame(rotations) {
+  const sourceWidth = els.preview.videoWidth;
+  const sourceHeight = els.preview.videoHeight;
+  if (!sourceWidth || !sourceHeight) return null;
+  rotations = ((rotations % 4) + 4) % 4;
+  const rotated = rotations % 2 === 1;
+  const width = rotated ? sourceHeight : sourceWidth;
+  const height = rotated ? sourceWidth : sourceHeight;
+  const canvas = zxingFrameCanvas(width, height, rotations);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, width, height);
+  if (rotations === 1) {
+    context.translate(0, height);
+    context.rotate(-Math.PI / 2);
+  } else if (rotations === 2) {
+    context.translate(width, height);
+    context.rotate(Math.PI);
+  } else if (rotations === 3) {
+    context.translate(width, 0);
+    context.rotate(Math.PI / 2);
+  }
+  context.drawImage(els.preview, 0, 0, sourceWidth, sourceHeight);
+  return canvas;
+}
+
+function decodeZxingRotation(reader, rotations) {
+  const canvas = drawZxingFrame(rotations);
+  if (
+    !canvas ||
+    !window.ZXing?.HTMLCanvasElementLuminanceSource ||
+    !window.ZXing?.HybridBinarizer ||
+    !window.ZXing?.BinaryBitmap
+  ) {
+    throw new Error("ZXing canvas decode unavailable");
+  }
+  const source = new window.ZXing.HTMLCanvasElementLuminanceSource(canvas);
+  const bitmap = new window.ZXing.BinaryBitmap(new window.ZXing.HybridBinarizer(source));
+  return reader.decodeBitmap(bitmap);
+}
+
+function decodeZxingFrame(reader) {
+  const attempts = [
+    [0],
+    [1],
+    [2],
+    [3]
+  ];
+  let lastExpectedError = null;
+  for (const [rotations] of attempts) {
+    try {
+      return decodeZxingRotation(reader, rotations);
+    } catch (error) {
+      if (!isExpectedZxingMiss(error)) throw error;
+      lastExpectedError = error;
+    }
+  }
+  throw lastExpectedError || new Error("No barcode found");
+}
+
+function startZxingLoop(generation = state.scanGeneration) {
   if (!window.ZXing?.BrowserMultiFormatReader) {
-    setStatus("Scanner unavailable", "error");
-    return;
+    return false;
   }
   const hints = new Map();
   const formats = ZXING_FAST_FORMATS
@@ -533,16 +664,38 @@ function startZxingLoop() {
   if (window.ZXing.DecodeHintType?.POSSIBLE_FORMATS) {
     hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
   }
+  if (window.ZXing.DecodeHintType?.TRY_HARDER) {
+    hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
+  }
   state.zxingReader = new window.ZXing.BrowserMultiFormatReader(hints, 180);
-  state.zxingReader.decodeFromVideoElementContinuously(els.preview, (result) => {
-    const barcode = decodedBarcodeText(result);
-    const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
-    state.barcodeCandidate = decision.candidate;
-    if (decision.confirmed && !state.scanInFlight && !state.scanLocked) {
-      state.barcodeCandidate = null;
-      lookupBarcode(barcode);
+  if (typeof state.zxingReader.decodeBitmap !== "function") {
+    return false;
+  }
+  runZxingLoop(state.zxingReader, generation);
+  return true;
+}
+
+async function runZxingLoop(reader, generation) {
+  while (state.scanning && generation === state.scanGeneration && reader === state.zxingReader) {
+    if (scannerReady()) {
+      try {
+        const barcode = decodedBarcodeText(decodeZxingFrame(reader));
+        if (barcode) {
+          const decision = confirmBarcodeCandidate(state.barcodeCandidate, barcode);
+          state.barcodeCandidate = decision.candidate;
+          if (decision.confirmed) {
+            state.barcodeCandidate = null;
+            await lookupBarcode(barcode);
+          }
+        }
+      } catch (error) {
+        if (!isExpectedZxingMiss(error)) {
+          setStatus("Scanning: rotated fallback", "ok");
+        }
+      }
     }
-  });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
 }
 
 function bindEvents() {

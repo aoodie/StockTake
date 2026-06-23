@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-2";
+} from "./frontend-utils.js?v=scanner-recovery-3";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -1647,7 +1647,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-2";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-3";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
