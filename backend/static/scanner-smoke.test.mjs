@@ -24,8 +24,8 @@ test("bundled ZXing exposes the video-element decoder used by the scanner", () =
 });
 
 test("scanner build cache is bumped for scanner recovery", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=outlet-pw-1/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=typed-pw-suggest-1/);
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-1/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-1/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);
