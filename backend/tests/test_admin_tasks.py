@@ -27,7 +27,7 @@ def test_mapping_page_is_served():
     client = TestClient(app)
     response = client.get("/mapping")
     assert response.status_code == 200
-    assert "mapping.js?v=scanner-recovery-3" in response.text
+    assert "mapping.js?v=scanner-recovery-4" in response.text
 
 
 def test_admin_page_loads_ai_copilot_bundle():

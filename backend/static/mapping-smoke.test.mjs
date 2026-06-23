@@ -23,6 +23,6 @@ test("mapping scanner uses the same rotated ZXing fallback as the phone scanner"
   assert.match(mappingSource, /drawZxingFrame/);
   assert.match(mappingSource, /HTMLCanvasElementLuminanceSource/);
   assert.match(mappingSource, /DecodeHintType\?\.TRY_HARDER/);
-  assert.match(mappingSource, /scanner-recovery-3/);
+  assert.match(mappingSource, /scanner-recovery-4/);
   assert.doesNotMatch(mappingSource, /decodeFromVideoElementContinuously\(els\.preview/);
 });

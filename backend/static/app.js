@@ -15,12 +15,13 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-3";
+} from "./frontend-utils.js?v=scanner-recovery-4";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
 const DEVICE_KEY = "stocktake-device-id";
 const SESSION_MEMORY_PREFIX = "stocktake-session";
+const LAST_CASE_TYPE_KEY = "stocktake-last-case-type";
 const productIndex = new Map();
 let catalogProducts = [];
 let catalogSessions = [];
@@ -180,7 +181,7 @@ let state = {
   locationId: "main-bar",
   locationName: "Bar",
   quantity: "",
-  caseType: "split",
+  caseType: readLastCaseType() || "split",
   currentProduct: null,
   pendingBarcode: "",
   lastBarcode: null,
@@ -358,7 +359,7 @@ async function restoreState() {
       zxingLoadPromise: null,
       cameraStartPromise: null,
       quantity: "",
-      caseType: "split",
+      caseType: readLastCaseType() || "split",
       currentProduct: null,
       pendingBarcode: "",
       lastBarcode: null,
@@ -622,7 +623,27 @@ function productSubtitle(product) {
 }
 
 function defaultCaseType(product) {
+  const lastUsed = readLastCaseType();
+  if (lastUsed) return lastUsed;
   return product?.procurewizard || String(product?.unit || "").toLowerCase() === "case" ? "full" : "split";
+}
+
+function readLastCaseType() {
+  try {
+    const value = localStorage.getItem(LAST_CASE_TYPE_KEY);
+    return value === "full" || value === "split" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberLastCaseType(value) {
+  const caseType = value === "full" ? "full" : "split";
+  try {
+    localStorage.setItem(LAST_CASE_TYPE_KEY, caseType);
+  } catch {
+    // Persisting the preference is best-effort; counting must still work.
+  }
 }
 
 function renderCaseTypeControl() {
@@ -1195,6 +1216,7 @@ async function confirmQuantity() {
       return;
     }
     if (duplicateAction === "edit") {
+      rememberLastCaseType(state.caseType);
       closeScanHud();
       resetActiveScan();
       openLineEditor(existingLine);
@@ -1205,6 +1227,7 @@ async function confirmQuantity() {
   } else {
     await addLine(product, quantity);
   }
+  rememberLastCaseType(state.caseType);
   const count = await currentProductCount(product);
   pulse(`Saved\nCurrent count: ${count}`);
   flashFeedback("success");
@@ -1214,7 +1237,7 @@ async function confirmQuantity() {
 
 function resetActiveScan(options = {}) {
   state.quantity = "";
-  state.caseType = "split";
+  state.caseType = readLastCaseType() || "split";
   state.pendingBarcode = "";
   state.scanInFlight = false;
   if (!options.keepProduct) state.currentProduct = null;
@@ -1647,7 +1670,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-3";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-4";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -2240,6 +2263,7 @@ function bindEvents() {
     if (button?.dataset.action === "save-next") confirmQuantity();
     if (button?.dataset.action === "set-case-type") {
       state.caseType = button.dataset.caseType === "full" ? "full" : "split";
+      rememberLastCaseType(state.caseType);
       renderCaseTypeControl();
       vibrate(20);
     }

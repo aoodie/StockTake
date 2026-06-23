@@ -28,8 +28,8 @@ test("bundled ZXing exposes the canvas bitmap decoder used by the scanner", () =
 });
 
 test("scanner build cache is bumped for scanner recovery", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-3/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-3/);
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-4/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-4/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);
@@ -112,6 +112,15 @@ test("full-screen confirmation separates full and split case counts", () => {
   assert.match(appSource, /data-case-type="split"/);
   assert.match(appSource, /case_type: state\.caseType/);
   assert.match(appSource, /findExistingLineForProduct\(product, state\.caseType\)/);
+});
+
+test("full-screen confirmation remembers the last used case type", () => {
+  assert.match(appSource, /LAST_CASE_TYPE_KEY/);
+  assert.match(appSource, /function readLastCaseType/);
+  assert.match(appSource, /function rememberLastCaseType/);
+  assert.match(appSource, /const lastUsed = readLastCaseType\(\)/);
+  assert.match(appSource, /rememberLastCaseType\(state\.caseType\)/);
+  assert.match(appSource, /state\.caseType = readLastCaseType\(\) \|\| "split"/);
 });
 
 test("phone outlet fallback includes the operational outlet list", () => {
