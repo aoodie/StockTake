@@ -640,6 +640,21 @@ def import_summary(
         warnings.append(f"{session['unmapped_product_count']} counted products are not mapped to this template.")
     if duplicate_mappings:
         warnings.append(f"{len(duplicate_mappings)} products map to multiple rows and will receive duplicate counts.")
+    decimal_count = 0
+    if session_id:
+        decimal_count = db.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM stocktake_lines
+            WHERE session_id = ? AND location_id = ?
+              AND INSTR(COALESCE(quantity_decimal, ''), '.') > 0
+            """,
+            (session_id, outlet_id),
+        ).fetchone()["c"]
+    if decimal_count:
+        warnings.append(
+            f"{decimal_count} scanned counts use decimals. Full case and split counts should be whole numbers."
+        )
     export_runs = [
         dict(row)
         for row in db.execute(

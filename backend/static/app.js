@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-4";
+} from "./frontend-utils.js?v=scanner-recovery-5";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -652,6 +652,33 @@ function renderCaseTypeControl() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
+  const quickValues = state.caseType === "full" ? ["1", "2", "5"] : ["1", "6", "12"];
+  els.scanHud.querySelectorAll("[data-quick-index]").forEach((button, index) => {
+    const value = quickValues[index] || "1";
+    button.dataset.value = value;
+    button.textContent = `+${value}`;
+  });
+  const help = els.scanHud.querySelector('[data-role="quantity-help"]');
+  if (help) help.textContent = state.caseType === "full" ? "Whole cases only" : "Loose units only";
+}
+
+function isWholeCountQuantity(value) {
+  return /^\d+$/.test(String(value ?? "").trim());
+}
+
+function countQuantityError() {
+  return state.caseType === "full"
+    ? "Enter whole full cases only. Use Split case for loose bottles or units."
+    : "Enter whole loose units only, for example 6 not 0.6.";
+}
+
+function showHudQuantityError(message) {
+  const input = els.scanHud.querySelector("#hudQuantityInput") || els.quantityInput;
+  input.classList.add("error");
+  const lookup = els.scanHud.querySelector('[data-role="lookup-status"]');
+  if (lookup) lookup.textContent = message;
+  flashFeedback("error");
+  vibrate([80, 50, 120]);
 }
 
 function showScanHud(product, quantity, total, variant = "success") {
@@ -684,12 +711,12 @@ function showScanHud(product, quantity, total, variant = "success") {
             <strong>Split case</strong><small>Loose bottles or units</small>
           </button>
         </div>
-        <label class="hud-quantity-label" for="hudQuantityInput">Quantity <span>Tap number or type</span></label>
-        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="decimal" enterkeyhint="done" autocomplete="off" aria-label="Quantity" value="${escapeHtml(quantity || "1")}" data-replace-on-entry="true">
+        <label class="hud-quantity-label" for="hudQuantityInput">Quantity <span data-role="quantity-help">Whole units only</span></label>
+        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" autocomplete="off" aria-label="Quantity" value="${escapeHtml(quantity || "1")}" data-replace-on-entry="true">
         <div class="hud-quick" role="group" aria-label="Quick quantity">
-          <button data-action="add-quantity" data-value="1" type="button">+1</button>
-          <button data-action="add-quantity" data-value="6" type="button">+6</button>
-          <button data-action="add-quantity" data-value="12" type="button">+12</button>
+          <button data-action="add-quantity" data-quick-index="0" data-value="1" type="button">+1</button>
+          <button data-action="add-quantity" data-quick-index="1" data-value="6" type="button">+6</button>
+          <button data-action="add-quantity" data-quick-index="2" data-value="12" type="button">+12</button>
           <button data-action="clear-quantity" type="button">Clear</button>
         </div>
         <div class="hud-keypad" role="group" aria-label="Quantity keypad">
@@ -702,7 +729,7 @@ function showScanHud(product, quantity, total, variant = "success") {
           <button data-action="quantity-key" data-value="7" type="button">7</button>
           <button data-action="quantity-key" data-value="8" type="button">8</button>
           <button data-action="quantity-key" data-value="9" type="button">9</button>
-          <button data-action="quantity-key" data-value="." type="button">.</button>
+          <button class="filler" disabled tabindex="-1" aria-hidden="true" type="button"></button>
           <button data-action="quantity-key" data-value="0" type="button">0</button>
           <button data-action="quantity-backspace" type="button">Del</button>
         </div>
@@ -716,6 +743,7 @@ function showScanHud(product, quantity, total, variant = "success") {
   `;
   state.awaitingNextScan = true;
   els.scanHud.classList.remove("hidden");
+  renderCaseTypeControl();
 }
 
 function closeScanHud({ reset = false } = {}) {
@@ -1194,11 +1222,13 @@ async function confirmQuantity() {
     els.manualBarcode.focus();
     return;
   }
-  const quantity = state.quantity || "1";
+  const quantity = String(state.quantity || "").trim();
   if (!isValidQuantity(quantity)) {
-    (els.scanHud.querySelector("#hudQuantityInput") || els.quantityInput).classList.add("error");
-    flashFeedback("error");
-    vibrate([80, 50, 120]);
+    showHudQuantityError("Enter a quantity before saving.");
+    return;
+  }
+  if (!isWholeCountQuantity(quantity)) {
+    showHudQuantityError(countQuantityError());
     return;
   }
   if (state.scanInFlight) return;
@@ -1670,7 +1700,7 @@ function loadZxingScript() {
   updateDiagnostics({ zxing_loader: "loading" });
   state.zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-4";
+    script.src = "/vendor/zxing-library.min.js?v=scanner-recovery-5";
     script.async = true;
     script.onload = () => {
       const zxing = currentZxing();
@@ -2265,6 +2295,8 @@ function bindEvents() {
       state.caseType = button.dataset.caseType === "full" ? "full" : "split";
       rememberLastCaseType(state.caseType);
       renderCaseTypeControl();
+      const input = els.scanHud.querySelector("#hudQuantityInput");
+      if (input && !isWholeCountQuantity(input.value.trim())) input.classList.add("error");
       vibrate(20);
     }
     if (button?.dataset.action === "set-quantity") {
@@ -2277,11 +2309,13 @@ function bindEvents() {
       renderQuantity();
     }
     if (button?.dataset.action === "add-quantity") {
-      state.quantity = addDecimalStrings(state.quantity || "0", button.dataset.value || "0");
+      const base = isWholeCountQuantity(state.quantity) ? state.quantity : "0";
+      state.quantity = addDecimalStrings(base, button.dataset.value || "0");
       const input = els.scanHud.querySelector("#hudQuantityInput");
       if (input) {
         input.value = state.quantity;
         input.dataset.replaceOnEntry = "true";
+        input.classList.remove("error");
       }
       renderQuantity();
     }
@@ -2297,14 +2331,15 @@ function bindEvents() {
     if (button?.dataset.action === "quantity-key") {
       const input = els.scanHud.querySelector("#hudQuantityInput");
       const key = button.dataset.value || "";
-      if (!input || (key === "." && state.quantity.includes("."))) return;
+      if (!input || key === ".") return;
       if (input.dataset.replaceOnEntry === "true") {
-        state.quantity = key === "." ? "0." : key;
+        state.quantity = key;
         input.dataset.replaceOnEntry = "false";
       } else {
         state.quantity = state.quantity === "0" && key !== "." ? key : `${state.quantity}${key}`;
       }
       input.value = state.quantity;
+      input.classList.remove("error");
       renderQuantity();
     }
     if (button?.dataset.action === "quantity-backspace") {
@@ -2322,6 +2357,7 @@ function bindEvents() {
     if (event.target.id !== "hudQuantityInput") return;
     state.quantity = event.target.value.trim();
     event.target.dataset.replaceOnEntry = "false";
+    event.target.classList.toggle("error", Boolean(state.quantity) && !isWholeCountQuantity(state.quantity));
     renderQuantity();
   });
   els.scanHud.addEventListener("focusin", (event) => {

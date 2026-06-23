@@ -50,6 +50,7 @@ def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_sna
     barcode_value = "COALESCE(sl.barcode_snapshot, p.barcode, '')"
     name_value = "COALESCE(sl.product_name_snapshot, p.name, '')" if prefer_scan_snapshots else "COALESCE(p.name, sl.product_name_snapshot, '')"
     draft_value = "COALESCE(sl.draft_status, p.draft_status, 'confirmed')" if prefer_scan_snapshots else "COALESCE(p.draft_status, sl.draft_status, 'confirmed')"
+    case_type_value = "COALESCE(sl.case_type, 'split')"
     rows = db.execute(
         f"""
         SELECT
@@ -62,13 +63,13 @@ def build_stocktake_workbook(db: Connection, session_id: str, *, prefer_scan_sna
             COALESCE(p.category, '') AS category,
             COALESCE(p.size, '') AS size,
             sl.quantity_decimal,
-            COALESCE(p.unit, 'each') AS unit,
+            CASE WHEN {case_type_value} = 'full' THEN 'full case' ELSE 'split unit' END AS unit,
             {draft_value} AS draft_status,
             CASE WHEN {bin_value} = '' THEN 'Y' ELSE 'N' END AS missing_bin,
             sl.counted_at,
             sl.device_id,
             COALESCE(sl.notes, '') AS notes,
-            COALESCE(sl.case_type, 'split') AS case_type
+            {case_type_value} AS case_type
         FROM stocktake_lines sl
         LEFT JOIN products p ON p.id = sl.product_id
         LEFT JOIN sessions s ON s.id = sl.session_id

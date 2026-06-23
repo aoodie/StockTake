@@ -28,8 +28,8 @@ test("bundled ZXing exposes the canvas bitmap decoder used by the scanner", () =
 });
 
 test("scanner build cache is bumped for scanner recovery", () => {
-  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-4/);
-  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-4/);
+  assert.match(appSource, /frontend-utils\.js\?v=scanner-recovery-5/);
+  assert.match(appSource, /zxing-library\.min\.js\?v=scanner-recovery-5/);
   assert.match(appSource, /data-action="save-next"/);
   assert.match(appSource, /state\.awaitingNextScan = true/);
   assert.match(appSource, /fetch\(`\/products\/lookup\//);
@@ -121,6 +121,16 @@ test("full-screen confirmation remembers the last used case type", () => {
   assert.match(appSource, /const lastUsed = readLastCaseType\(\)/);
   assert.match(appSource, /rememberLastCaseType\(state\.caseType\)/);
   assert.match(appSource, /state\.caseType = readLastCaseType\(\) \|\| "split"/);
+});
+
+test("full-screen confirmation only accepts whole case and split quantities", () => {
+  assert.match(appSource, /function isWholeCountQuantity/);
+  assert.match(appSource, /inputmode="numeric"/);
+  assert.match(appSource, /Whole cases only/);
+  assert.match(appSource, /Loose units only/);
+  assert.match(appSource, /const quantity = String\(state\.quantity \|\| ""\)\.trim\(\)/);
+  assert.match(appSource, /showHudQuantityError\(countQuantityError\(\)\)/);
+  assert.doesNotMatch(appSource, /data-action="quantity-key" data-value="\\."/);
 });
 
 test("phone outlet fallback includes the operational outlet list", () => {

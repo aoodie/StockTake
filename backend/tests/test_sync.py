@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from app.main import app
 from app import database
+from app.routers.sync import pre_export
 
 def open_session(session_id: str = "session-a") -> None:
     database.init_db()
@@ -483,6 +484,28 @@ def test_raw_scanned_export_includes_unmapped_draft_without_admin(tmp_path, monk
     assert response.status_code == 200
     assert response.headers["content-disposition"] == 'attachment; filename="scanned-lines-raw-session.xlsx"'
     assert len(response.content) > 1000
+
+
+def test_pre_export_flags_decimal_case_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute(
+            """
+            INSERT INTO stocktake_lines
+                (id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                 product_name_snapshot, quantity_decimal, case_type, draft_status, counted_at, device_id, notes)
+            VALUES
+                ('decimal-line', 'decimal-session', 'cellar', NULL, '123', '',
+                 'Decimal count', '0.6', 'full', 'confirmed', '2026-06-23T10:00:00Z', 'phone-a', '')
+            """
+        )
+        db.commit()
+
+    review = pre_export("decimal-session")
+
+    assert review["decimal_quantity_count"] == 1
 
 
 def test_sync_rejects_closed_session_without_blocking_valid_event(tmp_path, monkeypatch):

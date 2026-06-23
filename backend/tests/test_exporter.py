@@ -57,6 +57,8 @@ def test_export_preserves_zero_and_missing_bin_exception():
     workbook = load_workbook(BytesIO(data))
     assert workbook["Stocktake"][1][0].value == EXPORT_COLUMNS[0]
     assert workbook["Stocktake"][2][8].value == "0"
+    assert workbook["Stocktake"][2][9].value == "split unit"
+    assert workbook["Stocktake"][2][15].value == "split"
     assert workbook["Missing BIN Exceptions"][2][8].value == "0"
     assert workbook["Missing BIN Exceptions"][2][11].value == "Y"
 
@@ -94,5 +96,6 @@ def test_raw_export_prefers_barcode_and_name_captured_at_scan_time():
 
     assert row[4].value == "PHYSICAL-BARCODE"
     assert row[5].value == "Name Seen During Scan"
+    assert row[9].value == "full case"
     assert row[10].value == "draft"
     assert row[15].value == "full"

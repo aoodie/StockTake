@@ -27,7 +27,7 @@ def test_mapping_page_is_served():
     client = TestClient(app)
     response = client.get("/mapping")
     assert response.status_code == 200
-    assert "mapping.js?v=scanner-recovery-4" in response.text
+    assert "mapping.js?v=scanner-recovery-5" in response.text
 
 
 def test_admin_page_loads_ai_copilot_bundle():
@@ -35,7 +35,7 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=template-library-1" in response.text
+    assert "admin.js?v=case-counts-1" in response.text
     assert "Retained template" in response.text
 
 

@@ -7,7 +7,7 @@ import {
   confirmBarcodeCandidate,
   decodedBarcodeText,
   normalizeBarcode
-} from "./frontend-utils.js?v=scanner-recovery-4";
+} from "./frontend-utils.js?v=scanner-recovery-5";
 
 const els = {
   loginView: document.querySelector("#mappingLoginView"),

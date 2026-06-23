@@ -330,6 +330,9 @@ video { width: 100%; height: 100%; object-fit: cover; }
   color: #f8fafc;
   font-size: 24px;
 }
+.hud-keypad .filler {
+  visibility: hidden;
+}
 .hud-keypad button:active,
 .hud-quick button:active {
   background: #334155;

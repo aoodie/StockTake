@@ -651,7 +651,9 @@ def pre_export(session_id: str, _: None = Depends(require_admin)) -> dict:
                 COUNT(DISTINCT CASE WHEN COALESCE(p.bin, sl.bin_snapshot, '') = ''
                     THEN COALESCE(sl.product_id, sl.id) END) AS missing_bin_count,
                 COUNT(DISTINCT CASE WHEN COALESCE(p.draft_status, sl.draft_status, 'confirmed') = 'draft'
-                    THEN COALESCE(sl.product_id, sl.id) END) AS draft_count
+                    THEN COALESCE(sl.product_id, sl.id) END) AS draft_count,
+                SUM(CASE WHEN INSTR(COALESCE(sl.quantity_decimal, ''), '.') > 0
+                    THEN 1 ELSE 0 END) AS decimal_quantity_count
             FROM stocktake_lines sl
             LEFT JOIN products p ON p.id = sl.product_id
             WHERE sl.session_id = ?
@@ -663,6 +665,7 @@ def pre_export(session_id: str, _: None = Depends(require_admin)) -> dict:
         "line_count": stats["line_count"] or 0,
         "missing_bin_count": stats["missing_bin_count"] or 0,
         "draft_count": stats["draft_count"] or 0,
+        "decimal_quantity_count": stats["decimal_quantity_count"] or 0,
     }
 
 @router.get("/pre-export/{session_id}/missing-bin")
@@ -713,8 +716,8 @@ def update_product_bin(product_id: str, request: BinUpdateRequest, _: None = Dep
 def export_session(session_id: str, _: None = Depends(require_admin)) -> Response:
     init_db()
     review = pre_export(session_id)
-    if review["missing_bin_count"] or review["draft_count"]:
-        raise HTTPException(status_code=409, detail="Export blocked until product issues are resolved")
+    if review["missing_bin_count"] or review["draft_count"] or review["decimal_quantity_count"]:
+        raise HTTPException(status_code=409, detail="Export blocked until product issues and decimal counts are resolved")
     with get_db() as db:
         count = db.execute(
             "SELECT COUNT(*) AS count FROM stocktake_lines WHERE session_id = ?",

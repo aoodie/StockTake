@@ -94,7 +94,9 @@ def test_procurewizard_import_creates_catalog_products_and_round_trips_export(tm
             (now,),
         )
         db.commit()
-        filename, payload = build_procurewizard_csv(db, "session-pw", template_id=result["template_id"])
+        filename, payload = build_procurewizard_csv(
+            db, "session-pw", template_id=result["template_id"], warnings_acknowledged=True
+        )
 
     exported = payload.decode("cp1252")
     assert result["template_id"] in filename
@@ -237,6 +239,30 @@ def test_procurewizard_session_summary_separates_mapped_and_unmapped_counts(tmp_
     assert summary["session"]["unmapped_product_count"] == 1
     assert summary["rows"][0]["description"] == "Jack Daniels Rye"
     assert summary["rows"][0]["counted_quantity"] == 4
+
+
+def test_procurewizard_summary_warns_about_decimal_case_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db(force=True)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with database.get_db() as db:
+        import_procurewizard_csv(db, "pw.csv", sample_csv())
+        db.execute(
+            """
+            INSERT INTO stocktake_lines (
+                id, session_id, location_id, product_id, barcode_snapshot, bin_snapshot,
+                product_name_snapshot, quantity_decimal, case_type, draft_status, counted_at, device_id, notes
+            ) VALUES ('line-decimal', 'session-decimal', 'cellar', 'procurewizard-3862551', '3862551',
+                      '3862551', 'Jack Daniels Rye', '0.6', 'full', 'confirmed', ?, 'device-a', '')
+            """,
+            (now,),
+        )
+        db.commit()
+        summary = import_summary(db, "session-decimal")
+
+    assert any("use decimals" in warning for warning in summary["warnings"])
 
 
 def test_procurewizard_export_rejects_session_without_linked_counts(tmp_path, monkeypatch):

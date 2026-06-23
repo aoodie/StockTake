@@ -322,6 +322,10 @@ label {
   transform: translateY(-2px);
   border-color: var(--glass-border-focus);
 }
+.metric.warn {
+  border-color: rgba(245, 158, 11, 0.65);
+  background: rgba(245, 158, 11, 0.09);
+}
 .metric span {
   display: block;
   font-size: 11px;
