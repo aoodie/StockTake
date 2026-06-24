@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from typing import Any
 import sqlite3
 import json
+import re
 from ..database import (
     barcode_lookup_values, canonicalize_barcode, get_db, now_iso, normalize_identifier, init_db,
     product_select_sql, task_from_row, ensure_default_rows
@@ -11,7 +12,8 @@ from ..models import (
     LoginRequest, ProductPatchRequest, ProductUpsertRequest,
     TaskPatchRequest, TaskApproveRequest, BulkProductUpdateRequest,
     BulkProductDeleteRequest, ProductBarcodeRequest, ProductMergeRequest,
-    CatalogRestoreRequest, ProcureWizardImportRequest, ProcureWizardLinkRequest, SessionStatusRequest
+    CatalogRestoreRequest, LocationPatchRequest, LocationUpsertRequest,
+    ProcureWizardImportRequest, ProcureWizardLinkRequest, SessionStatusRequest
 )
 from ..auth import (
     admin_password, create_admin_session, revoke_admin_session,
@@ -37,6 +39,32 @@ from ..services.catalog_portability import (
 from .sync import enrich_task_by_id, pre_export, missing_bin_rows
 
 router = APIRouter()
+
+def slugify_location_id(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug[:80]
+
+def active_location_count(db: sqlite3.Connection) -> int:
+    return db.execute("SELECT COUNT(*) AS c FROM locations WHERE active = 1").fetchone()["c"]
+
+def location_rows(db: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = db.execute(
+        """
+        SELECT l.id, l.name, COALESCE(l.active, 1) AS active,
+               COUNT(sl.id) AS line_count,
+               MAX(sl.counted_at) AS last_counted_at
+        FROM locations l
+        LEFT JOIN stocktake_lines sl ON sl.location_id = l.id
+        GROUP BY l.id, l.name, l.active
+        ORDER BY COALESCE(l.active, 1) DESC, l.name COLLATE NOCASE
+        """
+    ).fetchall()
+    payload = []
+    for row in rows:
+        item = dict(row)
+        item["active"] = bool(item["active"])
+        payload.append(item)
+    return payload
 
 def audit_product_change(
     db: sqlite3.Connection,
@@ -1311,6 +1339,97 @@ def admin_restore_catalog(
         except (ValueError, sqlite3.IntegrityError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"filename": request.filename, **result}
+
+@router.get("/admin/api/locations")
+def admin_locations(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:
+    require_admin(_)
+    init_db()
+    ensure_default_rows()
+    with get_db() as db:
+        return {"locations": location_rows(db)}
+
+@router.post("/admin/api/locations")
+def admin_save_location(
+    request: LocationUpsertRequest,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    location_id = slugify_location_id(request.id or request.name)
+    if not location_id:
+        raise HTTPException(status_code=400, detail="Outlet ID must contain letters or numbers.")
+    current = now_iso()
+    with get_db() as db:
+        db.execute(
+            """
+            INSERT INTO locations (id, name, active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              active = 1,
+              created_at = COALESCE(locations.created_at, excluded.created_at),
+              updated_at = excluded.updated_at
+            """,
+            (location_id, request.name.strip(), current, current),
+        )
+        db.commit()
+        item = next((row for row in location_rows(db) if row["id"] == location_id), None)
+    if not item:
+        raise HTTPException(status_code=500, detail="Outlet was not saved.")
+    return {"location": item, "status": "active"}
+
+@router.patch("/admin/api/locations/{location_id}")
+def admin_update_location(
+    location_id: str,
+    request: LocationPatchRequest,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    location_id = normalize_identifier(location_id)
+    if not location_id:
+        raise HTTPException(status_code=400, detail="Outlet ID is required.")
+    current = now_iso()
+    with get_db() as db:
+        location = db.execute("SELECT id, active FROM locations WHERE id = ?", (location_id,)).fetchone()
+        if not location:
+            raise HTTPException(status_code=404, detail="Outlet not found")
+        if request.active is False and location["active"] and active_location_count(db) <= 1:
+            raise HTTPException(status_code=400, detail="At least one active outlet is required.")
+        fields = []
+        values: list[Any] = []
+        if request.name is not None:
+            fields.append("name = ?")
+            values.append(request.name.strip())
+        if request.active is not None:
+            fields.append("active = ?")
+            values.append(1 if request.active else 0)
+        if not fields:
+            raise HTTPException(status_code=400, detail="No outlet changes supplied.")
+        fields.append("updated_at = ?")
+        values.append(current)
+        values.append(location_id)
+        db.execute(f"UPDATE locations SET {', '.join(fields)} WHERE id = ?", values)
+        db.commit()
+        return {"locations": location_rows(db)}
+
+@router.delete("/admin/api/locations/{location_id}")
+def admin_archive_location(
+    location_id: str,
+    _: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict:
+    require_admin(_)
+    init_db()
+    location_id = normalize_identifier(location_id)
+    with get_db() as db:
+        location = db.execute("SELECT id, active FROM locations WHERE id = ?", (location_id,)).fetchone()
+        if not location:
+            raise HTTPException(status_code=404, detail="Outlet not found")
+        if location["active"] and active_location_count(db) <= 1:
+            raise HTTPException(status_code=400, detail="At least one active outlet is required.")
+        db.execute("UPDATE locations SET active = 0, updated_at = ? WHERE id = ?", (now_iso(), location_id))
+        db.commit()
+        return {"locations": location_rows(db), "status": "archived"}
 
 @router.get("/admin/api/sessions")
 def admin_sessions(_: str | None = Cookie(default=None, alias=ADMIN_COOKIE)) -> dict:

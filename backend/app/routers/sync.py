@@ -496,7 +496,9 @@ def catalog() -> dict:
             ).fetchone()
             product["procurewizard"] = dict(procurewizard) if procurewizard else None
             product_payload.append(product)
-        locations = db.execute("SELECT id, name FROM locations ORDER BY name").fetchall()
+        locations = db.execute(
+            "SELECT id, name FROM locations WHERE COALESCE(active, 1) = 1 ORDER BY name"
+        ).fetchall()
         sessions = db.execute(
             """
             SELECT id, name, period_date, status

@@ -35,8 +35,39 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=case-counts-1" in response.text
+    assert "admin.js?v=outlets-1" in response.text
     assert "Retained template" in response.text
+    assert "Outlets" in response.text
+
+
+def test_admin_can_add_archive_and_restore_outlets(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    monkeypatch.setenv("ADMIN_PASSWORD", "stocktake-admin")
+    database.init_db()
+    client = TestClient(app)
+    assert client.post("/admin/api/login", json={"password": "stocktake-admin"}).status_code == 200
+
+    created = client.post("/admin/api/locations", json={"name": "Rooftop Bar"})
+
+    assert created.status_code == 200
+    assert created.json()["location"]["id"] == "rooftop-bar"
+    catalog = client.get("/catalog").json()
+    assert {"id": "rooftop-bar", "name": "Rooftop Bar"} in catalog["locations"]
+
+    archived = client.delete("/admin/api/locations/rooftop-bar")
+
+    assert archived.status_code == 200
+    admin_locations = client.get("/admin/api/locations").json()["locations"]
+    assert any(location["id"] == "rooftop-bar" and location["active"] is False for location in admin_locations)
+    catalog = client.get("/catalog").json()
+    assert {"id": "rooftop-bar", "name": "Rooftop Bar"} not in catalog["locations"]
+
+    restored = client.patch("/admin/api/locations/rooftop-bar", json={"active": True})
+
+    assert restored.status_code == 200
+    catalog = client.get("/catalog").json()
+    assert {"id": "rooftop-bar", "name": "Rooftop Bar"} in catalog["locations"]
 
 
 def test_secure_session_validation(tmp_path, monkeypatch):
@@ -1209,6 +1240,7 @@ def test_catalog_exports_are_reimportable_and_backup_includes_photos(tmp_path, m
     with zipfile.ZipFile(io.BytesIO(backup.content)) as archive:
         assert "catalog/mapped-products.csv" in archive.namelist()
         assert "catalog/mapping-audit.csv" in archive.namelist()
+        assert "catalog/locations.json" in archive.namelist()
         assert archive.read("product-images/gin.png") == b"fake-png"
 
     with database.get_db() as db:

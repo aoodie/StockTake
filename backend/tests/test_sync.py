@@ -13,7 +13,7 @@ def open_session(session_id: str = "session-a") -> None:
         )
         db.commit()
 
-def test_catalog_has_operational_outlets_and_renames_main_bar_safely(tmp_path, monkeypatch):
+def test_catalog_has_operational_outlets_and_preserves_custom_names(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     database.init_db()
@@ -25,11 +25,24 @@ def test_catalog_has_operational_outlets_and_renames_main_bar_safely(tmp_path, m
 
     assert response.status_code == 200
     assert response.json()["locations"] == [
-        {"id": "main-bar", "name": "Bar"},
         {"id": "brasseries", "name": "Brasseries"},
         {"id": "cellar", "name": "Cellar"},
         {"id": "m-and-e", "name": "M&E"},
+        {"id": "main-bar", "name": "Main Bar"},
     ]
+
+def test_catalog_hides_archived_outlets(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
+    database.init_db()
+    with database.get_db() as db:
+        db.execute("INSERT INTO locations (id, name, active) VALUES ('roof', 'Roof', 0)")
+        db.commit()
+
+    response = TestClient(app).get("/catalog")
+
+    assert response.status_code == 200
+    assert {"id": "roof", "name": "Roof"} not in response.json()["locations"]
 
 def test_sync_rejects_offline_events_from_before_go_live_reset(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)

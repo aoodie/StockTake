@@ -111,7 +111,10 @@ def init_db(force: bool = False) -> None:
 
             CREATE TABLE IF NOT EXISTS locations (
                 id TEXT PRIMARY KEY,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT,
+                updated_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -360,6 +363,9 @@ def init_db(force: bool = False) -> None:
         add_column_if_missing(db, "sessions", "created_at", "TEXT")
         add_column_if_missing(db, "sessions", "updated_at", "TEXT")
         add_column_if_missing(db, "sessions", "exported_at", "TEXT")
+        add_column_if_missing(db, "locations", "active", "INTEGER NOT NULL DEFAULT 1")
+        add_column_if_missing(db, "locations", "created_at", "TEXT")
+        add_column_if_missing(db, "locations", "updated_at", "TEXT")
         add_column_if_missing(db, "stocktake_lines", "case_type", "TEXT NOT NULL DEFAULT 'split'")
         add_column_if_missing(db, "procurewizard_imports", "outlet_id", "TEXT NOT NULL DEFAULT 'cellar'")
         add_column_if_missing(db, "schema_migrations", "description", "TEXT NOT NULL DEFAULT ''")
@@ -576,7 +582,7 @@ def ensure_default_rows() -> None:
             """
             INSERT INTO locations (id, name)
             VALUES (?, ?)
-            ON CONFLICT(id) DO UPDATE SET name = excluded.name
+            ON CONFLICT(id) DO NOTHING
             """,
             [
                 ("cellar", "Cellar"),

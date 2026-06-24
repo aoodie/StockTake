@@ -5,6 +5,7 @@ const state = {
   llmSettings: null,
   products: [],
   sessions: [],
+  locations: [],
   productIssues: [],
   selectedTask: null,
   selectedProductDetail: null,
@@ -73,6 +74,10 @@ const els = {
   sessionId: document.querySelector("#sessionId"),
   sessionName: document.querySelector("#sessionName"),
   sessionDate: document.querySelector("#sessionDate"),
+  outletForm: document.querySelector("#outletForm"),
+  outletName: document.querySelector("#outletName"),
+  outletId: document.querySelector("#outletId"),
+  outletList: document.querySelector("#outletList"),
   sessionList: document.querySelector("#sessionList"),
   exportSession: document.querySelector("#exportSession"),
   exportReview: document.querySelector("#exportReview"),
@@ -899,6 +904,61 @@ async function openProductDetail(productId) {
     els.productDetailDialog.showModal();
   } catch (err) {
     showToast(err.message, 'error');
+  }
+}
+
+function renderProcureWizardOutletOptions() {
+  if (!els.pwOutlet) return;
+  const previous = els.pwOutlet.value;
+  const activeLocations = state.locations.filter((location) => location.active);
+  els.pwOutlet.innerHTML = activeLocations.map((location) => (
+    `<option value="${escapeHtml(location.id)}">${escapeHtml(location.name)}</option>`
+  )).join("");
+  if (activeLocations.some((location) => location.id === previous)) {
+    els.pwOutlet.value = previous;
+  } else if (activeLocations[0]) {
+    els.pwOutlet.value = activeLocations[0].id;
+  }
+}
+
+function renderOutletList() {
+  if (!els.outletList) return;
+  if (!state.locations.length) {
+    els.outletList.innerHTML = `<p class="empty-state">No outlets configured.</p>`;
+    return;
+  }
+  els.outletList.innerHTML = state.locations.map((location) => {
+    const archived = !location.active;
+    return `
+      <article class="outlet-row ${archived ? "archived" : ""}" data-location-id="${escapeHtml(location.id)}">
+        <div>
+          <div class="outlet-edit">
+            <input data-field="outlet-name" value="${escapeHtml(location.name)}" aria-label="Outlet name">
+            <button class="secondary" data-action="rename-outlet" data-id="${escapeHtml(location.id)}" type="button">Save</button>
+          </div>
+          <p class="outlet-meta">
+            <span>ID: ${escapeHtml(location.id)}</span>
+            <span> · ${escapeHtml(location.line_count || 0)} scan lines</span>
+            <span> · ${escapeHtml(location.last_counted_at ? location.last_counted_at.slice(0, 16).replace("T", " ") : "no scans yet")}</span>
+          </p>
+        </div>
+        <span class="badge">${archived ? "Archived" : "Active"}</span>
+        <button class="${archived ? "secondary" : "warning"}" data-action="${archived ? "restore-outlet" : "archive-outlet"}" data-id="${escapeHtml(location.id)}" type="button">
+          ${archived ? "Restore" : "Archive"}
+        </button>
+      </article>
+    `;
+  }).join("");
+}
+
+async function loadLocations() {
+  try {
+    const data = await api("/admin/api/locations");
+    state.locations = data.locations || [];
+    renderOutletList();
+    renderProcureWizardOutletOptions();
+  } catch (err) {
+    showToast(err.message, "error");
   }
 }
 
@@ -1729,6 +1789,83 @@ function bindEvents() {
     }
   });
 
+  // Outlet events
+  els.outletForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = els.outletName.value.trim();
+    const id = els.outletId.value.trim();
+    if (!name) {
+      showToast("Outlet name is required", "error");
+      return;
+    }
+    try {
+      await api("/admin/api/locations", {
+        method: "POST",
+        body: JSON.stringify({ name, id: id || null })
+      });
+      els.outletName.value = "";
+      els.outletId.value = "";
+      showToast("Outlet saved");
+      await loadLocations();
+      await loadProcureWizardStatus();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+
+  els.outletList?.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    const id = button.dataset.id;
+    if (button.dataset.action === "rename-outlet") {
+      const row = button.closest("[data-location-id]");
+      const name = row?.querySelector("[data-field='outlet-name']")?.value.trim();
+      if (!name) {
+        showToast("Outlet name is required", "error");
+        return;
+      }
+      try {
+        await api(`/admin/api/locations/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ name })
+        });
+        showToast("Outlet renamed");
+        await loadLocations();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    }
+    if (button.dataset.action === "archive-outlet") {
+      const confirmed = await confirmDialog(
+        "Archive outlet",
+        "Archive this outlet for future scans? Existing scan history remains intact.",
+        "Archive"
+      );
+      if (!confirmed) return;
+      try {
+        await api(`/admin/api/locations/${encodeURIComponent(id)}`, { method: "DELETE" });
+        showToast("Outlet archived");
+        await loadLocations();
+        await loadProcureWizardStatus();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    }
+    if (button.dataset.action === "restore-outlet") {
+      try {
+        await api(`/admin/api/locations/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ active: true })
+        });
+        showToast("Outlet restored");
+        await loadLocations();
+        await loadProcureWizardStatus();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    }
+  });
+
   // Sessions events
   els.sessionForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1860,6 +1997,7 @@ function bindEvents() {
 
 async function hydrate() {
   await loadDashboard();
+  await loadLocations();
   await Promise.all([loadTasks(), loadProducts(), loadSessions(), loadMappingProducts(), loadAiSuggestions(), loadLlmSettings()]);
   if (els.exportSession.value) await loadExportReview();
   await loadProcureWizardStatus();

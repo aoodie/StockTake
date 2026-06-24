@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
-    <link rel="stylesheet" href="/admin.css?v=case-counts-1">
+    <link rel="stylesheet" href="/admin.css?v=outlets-1">
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -232,6 +232,20 @@
             <input id="sessionDate" type="date" required>
             <button type="submit">Save Session</button>
           </form>
+          <section class="outlet-panel">
+            <div class="outlet-panel-head">
+              <div>
+                <h3>Outlets</h3>
+                <p class="section-desc">Add scanning outlets or archive ones you no longer count. Archived outlets stay attached to old scans.</p>
+              </div>
+            </div>
+            <form id="outletForm" class="inline-form outlet-form">
+              <input id="outletName" placeholder="Outlet name" required>
+              <input id="outletId" placeholder="optional-id">
+              <button type="submit">Add Outlet</button>
+            </form>
+            <div id="outletList" class="outlet-list"></div>
+          </section>
           <div id="sessionList" class="data-list"></div>
         </section>
 
@@ -257,12 +271,7 @@
             </label>
             <label class="pw-outlet-picker">
               <span>Count outlet for export</span>
-              <select id="pwOutlet">
-                <option value="cellar">Cellar</option>
-                <option value="main-bar">Bar</option>
-                <option value="brasseries">Brasseries</option>
-                <option value="m-and-e">M&amp;E</option>
-              </select>
+              <select id="pwOutlet"></select>
               <small>Counts are filtered to this outlet only when reviewing and exporting.</small>
             </label>
             </div>
@@ -408,6 +417,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=case-counts-1" type="module"></script>
+    <script src="/admin.js?v=outlets-1" type="module"></script>
   </body>
 </html>

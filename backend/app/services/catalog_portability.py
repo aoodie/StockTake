@@ -172,6 +172,22 @@ def build_catalog_backup(db: sqlite3.Connection) -> bytes:
         archive.writestr("catalog/unmapped-products.csv", build_catalog_csv(db, False))
         archive.writestr("catalog/mapping-audit.csv", build_mapping_audit_csv(db))
         archive.writestr(
+            "catalog/locations.json",
+            json.dumps(
+                [
+                    dict(row)
+                    for row in db.execute(
+                        """
+                        SELECT id, name, COALESCE(active, 1) AS active, created_at, updated_at
+                        FROM locations
+                        ORDER BY COALESCE(active, 1) DESC, name COLLATE NOCASE
+                        """
+                    ).fetchall()
+                ],
+                indent=2,
+            ),
+        )
+        archive.writestr(
             "catalog/manifest.json",
             json.dumps({"format_version": 1, "created_at": now_iso(), "summary": catalog_summary(db)}, indent=2),
         )

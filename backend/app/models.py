@@ -62,6 +62,14 @@ class SessionStatusRequest(BaseModel):
     status: Literal["draft", "open", "counting", "review", "approved", "exported", "archived"]
     reason: str = Field(default="", max_length=500)
 
+class LocationUpsertRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    id: str | None = Field(default=None, max_length=80)
+
+class LocationPatchRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    active: bool | None = None
+
 class TaskPatchRequest(BaseModel):
     status: Literal["queued", "enriching", "review_needed", "approved", "failed"] | None = None
     suggested: dict[str, Any] | None = None
