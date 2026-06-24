@@ -1456,12 +1456,15 @@ function bindEvents() {
         loadMappingRecent();
         setTimeout(() => els.mappingBarcodeInput.focus(), 80);
       }
-      if (button.dataset.view === "ai") loadAiSuggestions();
       if (button.dataset.view === "export") {
         loadExportReview();
         loadCatalogExportSummary();
       }
-      if (button.dataset.view === "settings") loadLocations();
+      if (button.dataset.view === "settings") {
+        loadAiSuggestions();
+        loadLlmSettings();
+        loadLocations();
+      }
     });
   });
 

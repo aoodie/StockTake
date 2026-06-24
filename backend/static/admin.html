@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
-    <link rel="stylesheet" href="/admin.css?v=settings-1">
+    <link rel="stylesheet" href="/admin.css?v=settings-2">
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,9 +28,6 @@
         <nav class="tabs" aria-label="Admin sections">
           <button class="active" data-view="tasks" type="button">
             <span class="nav-icon">📋</span> Tasks
-          </button>
-          <button data-view="ai" type="button">
-            <span class="nav-icon">🤖</span> AI Copilot
           </button>
           <button data-view="products" type="button">
             <span class="nav-icon">📦</span> Products
@@ -82,52 +79,6 @@
             <button id="refreshTasksButton" type="button">Refresh List</button>
           </div>
           <div id="taskList" class="task-list"></div>
-        </section>
-
-        <!-- AI Product Copilot View -->
-        <section class="view hidden" id="aiView">
-          <div class="section-head">
-            <div>
-              <h2>AI Product Copilot</h2>
-              <p class="section-desc">Generate auditable product fixes from catalog issues, online lookup evidence, and ProcureWizard context.</p>
-            </div>
-            <div class="actions-group">
-              <button id="generateIssueSuggestionsButton" class="accent-btn" type="button">Generate From Issues</button>
-              <button id="reloadAiSuggestionsButton" class="secondary" type="button">Reload Queue</button>
-            </div>
-          </div>
-          <div class="ai-toolbar">
-            <label>Suggestion status
-              <select id="aiSuggestionStatus">
-                <option value="pending">Pending review</option>
-                <option value="applied">Applied</option>
-                <option value="rejected">Rejected</option>
-                <option value="">All suggestions</option>
-              </select>
-            </label>
-            <form id="llmSettingsForm" class="llm-settings-form">
-              <label>OpenAI model
-                <input id="openaiModelInput" autocomplete="off" spellcheck="false" placeholder="gpt-4.1">
-              </label>
-              <label>OpenAI token
-                <input id="openaiTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="Paste token to update">
-              </label>
-              <label class="toggle-row llm-clear-row">
-                <input id="clearOpenaiTokenInput" type="checkbox">
-                <span>Clear saved token</span>
-              </label>
-              <div class="llm-settings-actions">
-                <button id="testLlmSettingsButton" class="secondary" type="button">Test Connection</button>
-                <button class="accent-btn" type="submit">Save & Test</button>
-              </div>
-              <p id="llmSettingsStatus" class="field-note"></p>
-            </form>
-            <div class="ai-principle">
-              <strong>Guardrail</strong>
-              <span>AI prepares field changes. Admin approval is required before catalog data changes.</span>
-            </div>
-          </div>
-          <div id="aiSuggestionList" class="ai-suggestion-list"></div>
         </section>
 
         <!-- Products Section View -->
@@ -313,6 +264,50 @@
               <p class="section-desc">Manage operational setup for phones, exports, and retained stocktake data</p>
             </div>
           </div>
+          <section class="outlet-panel ai-settings-panel">
+            <div class="outlet-panel-head">
+              <div>
+                <h3>AI Product Copilot</h3>
+                <p class="section-desc">Generate auditable product fixes from catalog issues, online lookup evidence, and ProcureWizard context.</p>
+              </div>
+              <div class="actions-group">
+                <button id="generateIssueSuggestionsButton" class="accent-btn" type="button">Generate From Issues</button>
+                <button id="reloadAiSuggestionsButton" class="secondary" type="button">Reload Queue</button>
+              </div>
+            </div>
+            <div class="ai-toolbar">
+              <label>Suggestion status
+                <select id="aiSuggestionStatus">
+                  <option value="pending">Pending review</option>
+                  <option value="applied">Applied</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="">All suggestions</option>
+                </select>
+              </label>
+              <form id="llmSettingsForm" class="llm-settings-form">
+                <label>OpenAI model
+                  <input id="openaiModelInput" autocomplete="off" spellcheck="false" placeholder="gpt-4.1">
+                </label>
+                <label>OpenAI token
+                  <input id="openaiTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="Paste token to update">
+                </label>
+                <label class="toggle-row llm-clear-row">
+                  <input id="clearOpenaiTokenInput" type="checkbox">
+                  <span>Clear saved token</span>
+                </label>
+                <div class="llm-settings-actions">
+                  <button id="testLlmSettingsButton" class="secondary" type="button">Test Connection</button>
+                  <button class="accent-btn" type="submit">Save & Test</button>
+                </div>
+                <p id="llmSettingsStatus" class="field-note"></p>
+              </form>
+              <div class="ai-principle">
+                <strong>Guardrail</strong>
+                <span>AI prepares field changes. Admin approval is required before catalog data changes.</span>
+              </div>
+            </div>
+            <div id="aiSuggestionList" class="ai-suggestion-list"></div>
+          </section>
           <section class="outlet-panel">
             <div class="outlet-panel-head">
               <div>
@@ -430,6 +425,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=settings-1" type="module"></script>
+    <script src="/admin.js?v=settings-2" type="module"></script>
   </body>
 </html>
