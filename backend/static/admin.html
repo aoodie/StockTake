@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f19">
     <title>StockTake Admin</title>
-    <link rel="stylesheet" href="/admin.css?v=outlets-1">
+    <link rel="stylesheet" href="/admin.css?v=settings-1">
     <!-- Google Fonts Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -43,6 +43,9 @@
           </button>
           <button data-view="export" type="button">
             <span class="nav-icon">📤</span> Export
+          </button>
+          <button data-view="settings" type="button">
+            <span class="nav-icon">⚙️</span> Settings
           </button>
         </nav>
         <button id="logoutButton" class="ghost" type="button">Log out</button>
@@ -232,20 +235,6 @@
             <input id="sessionDate" type="date" required>
             <button type="submit">Save Session</button>
           </form>
-          <section class="outlet-panel">
-            <div class="outlet-panel-head">
-              <div>
-                <h3>Outlets</h3>
-                <p class="section-desc">Add scanning outlets or archive ones you no longer count. Archived outlets stay attached to old scans.</p>
-              </div>
-            </div>
-            <form id="outletForm" class="inline-form outlet-form">
-              <input id="outletName" placeholder="Outlet name" required>
-              <input id="outletId" placeholder="optional-id">
-              <button type="submit">Add Outlet</button>
-            </form>
-            <div id="outletList" class="outlet-list"></div>
-          </section>
           <div id="sessionList" class="data-list"></div>
         </section>
 
@@ -314,6 +303,30 @@
             </div>
           </section>
           <div id="exportReview" class="export-review"></div>
+        </section>
+
+        <!-- Settings Section View -->
+        <section class="view hidden" id="settingsView">
+          <div class="section-head">
+            <div>
+              <h2>Settings</h2>
+              <p class="section-desc">Manage operational setup for phones, exports, and retained stocktake data</p>
+            </div>
+          </div>
+          <section class="outlet-panel">
+            <div class="outlet-panel-head">
+              <div>
+                <h3>Outlets</h3>
+                <p class="section-desc">Add scanning outlets or archive ones you no longer count. Archived outlets stay attached to old scans.</p>
+              </div>
+            </div>
+            <form id="outletForm" class="inline-form outlet-form">
+              <input id="outletName" placeholder="Outlet name" required>
+              <input id="outletId" placeholder="optional-id">
+              <button type="submit">Add Outlet</button>
+            </form>
+            <div id="outletList" class="outlet-list"></div>
+          </section>
         </section>
       </section>
     </main>
@@ -417,6 +430,6 @@
       </form>
     </dialog>
 
-    <script src="/admin.js?v=outlets-1" type="module"></script>
+    <script src="/admin.js?v=settings-1" type="module"></script>
   </body>
 </html>

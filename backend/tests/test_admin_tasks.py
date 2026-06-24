@@ -35,8 +35,9 @@ def test_admin_page_loads_ai_copilot_bundle():
     response = client.get("/admin")
     assert response.status_code == 200
     assert "AI Product Copilot" in response.text
-    assert "admin.js?v=outlets-1" in response.text
+    assert "admin.js?v=settings-1" in response.text
     assert "Retained template" in response.text
+    assert "Settings" in response.text
     assert "Outlets" in response.text
 
 

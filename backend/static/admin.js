@@ -1461,6 +1461,7 @@ function bindEvents() {
         loadExportReview();
         loadCatalogExportSummary();
       }
+      if (button.dataset.view === "settings") loadLocations();
     });
   });
 
