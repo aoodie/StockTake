@@ -241,7 +241,7 @@ def test_procurewizard_session_summary_separates_mapped_and_unmapped_counts(tmp_
     assert summary["rows"][0]["counted_quantity"] == 4
 
 
-def test_procurewizard_summary_warns_about_decimal_case_counts(tmp_path, monkeypatch):
+def test_procurewizard_summary_allows_decimal_case_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "stocktake.db")
     database.init_db(force=True)
@@ -262,7 +262,8 @@ def test_procurewizard_summary_warns_about_decimal_case_counts(tmp_path, monkeyp
         db.commit()
         summary = import_summary(db, "session-decimal")
 
-    assert any("use decimals" in warning for warning in summary["warnings"])
+    assert summary["warnings"] == []
+    assert summary["rows"][0]["counted_quantity"] == 0.6
 
 
 def test_procurewizard_export_rejects_session_without_linked_counts(tmp_path, monkeypatch):

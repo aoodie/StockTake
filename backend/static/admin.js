@@ -1007,20 +1007,20 @@ async function loadExportReview(sessionId = els.exportSession.value) {
   try {
     const data = await api(`/admin/api/export/${encodeURIComponent(sessionId)}/review`);
     const decimalCount = Number(data.decimal_quantity_count || 0);
-    const ready = data.line_count > 0 && data.missing_bin_count === 0 && data.draft_count === 0 && decimalCount === 0;
+    const ready = data.line_count > 0 && data.missing_bin_count === 0 && data.draft_count === 0;
     const rows = data.missing_bin_rows || [];
     els.exportReview.innerHTML = `
       <div class="export-readiness ${ready ? "ready" : data.line_count ? "warning" : "blocked"}">
         <div>
           <strong>${ready ? "Validated export ready" : data.line_count ? "Export needs review" : "No scans in this session"}</strong>
-          <span>${ready ? "All scanned lines have confirmed products, BINs, and whole case/split counts." : data.line_count ? "Raw scans can be downloaded now. Resolve exceptions before using the validated Excel export." : "Choose a session containing scanned stocktake lines."}</span>
+          <span>${ready ? "All scanned lines have confirmed products and BINs." : data.line_count ? "Raw scans can be downloaded now. Resolve exceptions before using the validated Excel export." : "Choose a session containing scanned stocktake lines."}</span>
         </div>
       </div>
       <div class="summary-grid">
         <div class="metric"><span>Lines Counted</span><strong>${escapeHtml(data.line_count)}</strong></div>
         <div class="metric"><span>Missing BIN</span><strong>${escapeHtml(data.missing_bin_count)}</strong></div>
         <div class="metric"><span>Unresolved Drafts</span><strong>${escapeHtml(data.draft_count)}</strong></div>
-        <div class="metric ${decimalCount ? "warn" : ""}"><span>Decimal Counts</span><strong>${escapeHtml(decimalCount)}</strong></div>
+        <div class="metric"><span>Decimal Counts</span><strong>${escapeHtml(decimalCount)}</strong></div>
       </div>
       <div class="export-downloads">
         <a class="download-link ${data.line_count ? "" : "disabled"}" href="/export/scanned/${encodeURIComponent(sessionId)}">

@@ -718,8 +718,8 @@ def update_product_bin(product_id: str, request: BinUpdateRequest, _: None = Dep
 def export_session(session_id: str, _: None = Depends(require_admin)) -> Response:
     init_db()
     review = pre_export(session_id)
-    if review["missing_bin_count"] or review["draft_count"] or review["decimal_quantity_count"]:
-        raise HTTPException(status_code=409, detail="Export blocked until product issues and decimal counts are resolved")
+    if review["missing_bin_count"] or review["draft_count"]:
+        raise HTTPException(status_code=409, detail="Export blocked until product issues are resolved")
     with get_db() as db:
         count = db.execute(
             "SELECT COUNT(*) AS count FROM stocktake_lines WHERE session_id = ?",

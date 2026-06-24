@@ -15,7 +15,7 @@ import {
   normalizeBarcode,
   normalizeQuantity,
   scannerBlockReason
-} from "./frontend-utils.js?v=scanner-recovery-5";
+} from "./frontend-utils.js?v=quantity-decimal-1";
 
 const DB_NAME = "stocktake-web";
 const DB_VERSION = 1;
@@ -659,17 +659,7 @@ function renderCaseTypeControl() {
     button.textContent = `+${value}`;
   });
   const help = els.scanHud.querySelector('[data-role="quantity-help"]');
-  if (help) help.textContent = state.caseType === "full" ? "Whole cases only" : "Loose units only";
-}
-
-function isWholeCountQuantity(value) {
-  return /^\d+$/.test(String(value ?? "").trim());
-}
-
-function countQuantityError() {
-  return state.caseType === "full"
-    ? "Enter whole full cases only. Use Split case for loose bottles or units."
-    : "Enter whole loose units only, for example 6 not 0.6.";
+  if (help) help.textContent = state.caseType === "full" ? "Cases, decimals allowed" : "Units, decimals allowed";
 }
 
 function showHudQuantityError(message) {
@@ -711,8 +701,8 @@ function showScanHud(product, quantity, total, variant = "success") {
             <strong>Split case</strong><small>Loose bottles or units</small>
           </button>
         </div>
-        <label class="hud-quantity-label" for="hudQuantityInput">Quantity <span data-role="quantity-help">Whole units only</span></label>
-        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" autocomplete="off" aria-label="Quantity" value="${escapeHtml(quantity || "1")}" data-replace-on-entry="true">
+        <label class="hud-quantity-label" for="hudQuantityInput">Quantity <span data-role="quantity-help">Decimals allowed</span></label>
+        <input id="hudQuantityInput" class="hud-quantity-input" inputmode="decimal" enterkeyhint="done" autocomplete="off" aria-label="Quantity" value="${escapeHtml(quantity || "1")}" data-replace-on-entry="true">
         <div class="hud-quick" role="group" aria-label="Quick quantity">
           <button data-action="add-quantity" data-quick-index="0" data-value="1" type="button">+1</button>
           <button data-action="add-quantity" data-quick-index="1" data-value="6" type="button">+6</button>
@@ -729,7 +719,7 @@ function showScanHud(product, quantity, total, variant = "success") {
           <button data-action="quantity-key" data-value="7" type="button">7</button>
           <button data-action="quantity-key" data-value="8" type="button">8</button>
           <button data-action="quantity-key" data-value="9" type="button">9</button>
-          <button class="filler" disabled tabindex="-1" aria-hidden="true" type="button"></button>
+          <button data-action="quantity-key" data-value="." type="button">.</button>
           <button data-action="quantity-key" data-value="0" type="button">0</button>
           <button data-action="quantity-backspace" type="button">Del</button>
         </div>
@@ -1225,10 +1215,6 @@ async function confirmQuantity() {
   const quantity = String(state.quantity || "").trim();
   if (!isValidQuantity(quantity)) {
     showHudQuantityError("Enter a quantity before saving.");
-    return;
-  }
-  if (!isWholeCountQuantity(quantity)) {
-    showHudQuantityError(countQuantityError());
     return;
   }
   if (state.scanInFlight) return;
@@ -2296,7 +2282,7 @@ function bindEvents() {
       rememberLastCaseType(state.caseType);
       renderCaseTypeControl();
       const input = els.scanHud.querySelector("#hudQuantityInput");
-      if (input && !isWholeCountQuantity(input.value.trim())) input.classList.add("error");
+      if (input) input.classList.toggle("error", Boolean(input.value.trim()) && !isValidQuantity(input.value.trim()));
       vibrate(20);
     }
     if (button?.dataset.action === "set-quantity") {
@@ -2309,7 +2295,7 @@ function bindEvents() {
       renderQuantity();
     }
     if (button?.dataset.action === "add-quantity") {
-      const base = isWholeCountQuantity(state.quantity) ? state.quantity : "0";
+      const base = isValidQuantity(state.quantity) ? state.quantity : "0";
       state.quantity = addDecimalStrings(base, button.dataset.value || "0");
       const input = els.scanHud.querySelector("#hudQuantityInput");
       if (input) {
@@ -2331,9 +2317,9 @@ function bindEvents() {
     if (button?.dataset.action === "quantity-key") {
       const input = els.scanHud.querySelector("#hudQuantityInput");
       const key = button.dataset.value || "";
-      if (!input || key === ".") return;
+      if (!input || (key === "." && state.quantity.includes("."))) return;
       if (input.dataset.replaceOnEntry === "true") {
-        state.quantity = key;
+        state.quantity = key === "." ? "0." : key;
         input.dataset.replaceOnEntry = "false";
       } else {
         state.quantity = state.quantity === "0" && key !== "." ? key : `${state.quantity}${key}`;
@@ -2357,7 +2343,7 @@ function bindEvents() {
     if (event.target.id !== "hudQuantityInput") return;
     state.quantity = event.target.value.trim();
     event.target.dataset.replaceOnEntry = "false";
-    event.target.classList.toggle("error", Boolean(state.quantity) && !isWholeCountQuantity(state.quantity));
+    event.target.classList.toggle("error", Boolean(state.quantity) && !isValidQuantity(state.quantity));
     renderQuantity();
   });
   els.scanHud.addEventListener("focusin", (event) => {
